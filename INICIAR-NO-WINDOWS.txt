@@ -1,0 +1,9 @@
+MEU FINANCEIRO — WINDOWS 11
+
+1. Extraia o arquivo ZIP inteiro.
+2. Abra a pasta "windows".
+3. Execute "Start-MeuFinanceiro.cmd".
+4. Para criar um atalho, execute "Instalar-Atalho.cmd".
+
+O Microsoft Edge será aberto em modo de aplicativo.
+Os dados permanecem no armazenamento local do computador.

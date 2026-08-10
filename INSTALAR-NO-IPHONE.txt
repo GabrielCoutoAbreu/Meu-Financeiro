@@ -1,0 +1,12 @@
+MEU FINANCEIRO — IPHONE
+
+A pasta "app" precisa ser publicada em um endereço HTTPS.
+Consulte o README.md para publicação gratuita no GitHub Pages.
+
+Depois de publicado:
+1. Abra o endereço no Safari.
+2. Toque no botão Compartilhar.
+3. Selecione "Adicionar à Tela de Início".
+4. Confirme em "Adicionar".
+
+O aplicativo aparecerá como um ícone e abrirá em tela cheia.
