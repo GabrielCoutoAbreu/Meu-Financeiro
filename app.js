@@ -517,7 +517,7 @@ function renderSettings() {
         <div class="list-row"><div><div class="row-title">Lançamentos</div><div class="row-subtitle">Ganhos, gastos, transferências e compras são cadastrados manualmente por você.</div></div><span class="chip confirmed">Manual</span></div>
         <div class="list-row"><div><div class="row-title">Armazenamento</div><div class="row-subtitle">Os dados permanecem neste dispositivo; não há servidor nem conta de usuário.</div></div><span class="chip confirmed">Local</span></div>
         <div class="list-row"><div><div class="row-title">Levar dados para outro aparelho</div><div class="row-subtitle">Gere uma cópia JSON e restaure-a no outro dispositivo quando desejar.</div></div><span class="chip pending">Backup</span></div>
-        <div class="list-row"><div><div class="row-title">Versão</div><div class="row-subtitle">Aplicativo Web Progressivo (PWA) compatível com iPhone e Windows 11.</div></div><strong>1.1.0</strong></div>
+        <div class="list-row"><div><div class="row-title">Versão</div><div class="row-subtitle">Aplicativo Web Progressivo (PWA) compatível com iPhone e Windows 11.</div></div><strong>1.1.1</strong></div>
       </div>
     </article>`;
   return pageShell(content);
@@ -532,7 +532,7 @@ function selectOptions(options, selected) {
 }
 
 function openModal(title, body, formId, submitLabel = 'Salvar', wide = false) {
-  document.getElementById('modal-root').innerHTML = `<div class="modal-backdrop" data-action="close-modal"><section class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}" style="${wide ? 'width:min(860px,100%)' : ''}" onclick="event.stopPropagation()"><div class="modal-header"><h2 class="modal-title">${esc(title)}</h2><button class="icon-button" data-action="close-modal" aria-label="Fechar">×</button></div><div class="modal-body">${body}</div><div class="modal-footer"><button class="button" data-action="close-modal">Cancelar</button><button class="button primary" type="submit" form="${formId}">${esc(submitLabel)}</button></div></section></div>`;
+  document.getElementById('modal-root').innerHTML = `<div class="modal-backdrop" data-action="close-modal"><section class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}" style="${wide ? 'width:min(860px,100%)' : ''}"><div class="modal-header"><h2 class="modal-title">${esc(title)}</h2><button class="icon-button" type="button" data-action="close-modal" aria-label="Fechar">×</button></div><div class="modal-body">${body}</div><div class="modal-footer"><button class="button" type="button" data-action="close-modal">Cancelar</button><button class="button primary" type="submit" form="${formId}">${esc(submitLabel)}</button></div></section></div>`;
   setTimeout(() => document.querySelector(`#${formId} input, #${formId} select`)?.focus(), 30);
 }
 
@@ -781,7 +781,13 @@ document.addEventListener('click', event => {
   const id = button.dataset.id;
   if (action === 'prev-month') { ui.month = shiftMonth(ui.month, -1); render(); }
   if (action === 'next-month') { ui.month = shiftMonth(ui.month, 1); render(); }
-  if (action === 'close-modal') closeModal();
+  if (action === 'close-modal') {
+    // Se o clique veio do fundo escurecido, fecha somente quando o próprio fundo foi tocado.
+    // Cliques dentro da janela não devem fechá-la. Os botões × e Cancelar fecham normalmente.
+    if (button.classList.contains('modal-backdrop') && event.target !== button) return;
+    closeModal();
+    return;
+  }
   if (action === 'dismiss-install') { state.preferences.showInstallHelp = false; persist(); render(); }
   if (action === 'install-app') installApp();
   if (action === 'add-transaction') openTransactionForm();

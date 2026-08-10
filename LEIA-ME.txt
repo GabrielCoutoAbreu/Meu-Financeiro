@@ -1,0 +1,16 @@
+CORREÇÃO MEU FINANCEIRO v1.1.1
+
+Arquivos a substituir na raiz do repositório GitHub:
+- app.js
+- index.html
+- sw.js
+
+Correção:
+- botão X das janelas modais;
+- botão Cancelar;
+- toque no fundo escurecido fecha a janela;
+- toque dentro da janela não fecha acidentalmente;
+- atualização de cache do PWA para v1.1.1.
+
+No GitHub, apague/substitua os três arquivos antigos na raiz e faça commit.
+Depois aguarde o GitHub Pages publicar a nova versão.
