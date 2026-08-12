@@ -1,12 +1,13 @@
-const CACHE = 'meu-financeiro-v3';
+const CACHE = 'meu-financeiro-v4';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css',
-  './app.js?v=1.1.1',
+  './styles.css?v=1.2.0',
+  './config.js?v=1.2.0',
+  './app.js?v=1.2.0',
   './manifest.webmanifest',
-  './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icon-192.png',
+  './icon-512.png'
 ];
 
 self.addEventListener('install', event => {
@@ -23,11 +24,18 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
+
+  // Chamadas de API e autenticação devem sempre ir à rede.
+  if (event.request.url.includes('.supabase.co/')) return;
+
   event.respondWith(
     caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
       const copy = response.clone();
       caches.open(CACHE).then(cache => cache.put(event.request, copy));
       return response;
-    }).catch(() => caches.match('./index.html')))
+    }).catch(() => {
+      if (event.request.mode === 'navigate') return caches.match('./index.html');
+      return caches.match(event.request);
+    }))
   );
 });

@@ -1,7 +1,10 @@
 'use strict';
 
-const STORAGE_KEY = 'meu-financeiro-data-v1';
-const APP_VERSION = 2;
+const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
+const APP_VERSION = 3;
+const RELEASE_VERSION = '1.2.0';
+const REMOTE_TABLE = 'user_app_state';
+const APP_URL = 'https://gabrielcoutoabreu.github.io/Meu-Financeiro/';
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 const monthName = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric' });
@@ -24,7 +27,13 @@ const PAGE_META = {
   settings: ['Configurações', 'Preferências, segurança e cópias dos dados.']
 };
 
-let state = loadState();
+let state = defaultState();
+let authSession = null;
+let authReady = false;
+let supabaseClient = null;
+let syncTimer = null;
+let syncPollTimer = null;
+let syncMeta = { status: 'local', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
 let ui = {
   page: 'dashboard',
   month: monthKey(new Date()),
@@ -32,7 +41,9 @@ let ui = {
   transactionSearch: '',
   transactionType: 'all',
   transactionStatus: 'all',
-  deferredInstallPrompt: null
+  deferredInstallPrompt: null,
+  authMode: 'signin',
+  authMessage: ''
 };
 
 function uid() {
@@ -139,19 +150,266 @@ function normalizeState(data) {
   };
 }
 
-function loadState() {
+function userStorageKey(userId) {
+  return `meu-financeiro-data-v2-${userId}`;
+}
+
+function syncStorageKey(userId) {
+  return `meu-financeiro-sync-v2-${userId}`;
+}
+
+function hasMeaningfulData(candidate) {
+  if (!candidate) return false;
+  return ['accounts', 'cards', 'transactions', 'budgets', 'goals'].some(key => Array.isArray(candidate[key]) && candidate[key].length > 0);
+}
+
+function readStoredState(key) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? normalizeState(JSON.parse(raw)) : defaultState();
+    const raw = localStorage.getItem(key);
+    return raw ? normalizeState(JSON.parse(raw)) : null;
   } catch (error) {
-    console.error('Falha ao carregar os dados:', error);
-    return defaultState();
+    console.error('Falha ao carregar os dados locais:', error);
+    return null;
   }
 }
 
-function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+function loadStateForUser(userId) {
+  const userState = readStoredState(userStorageKey(userId));
+  if (userState) return userState;
+  const legacy = readStoredState(LEGACY_STORAGE_KEY);
+  return legacy || defaultState();
+}
+
+function loadSyncMeta(userId) {
+  try {
+    const raw = localStorage.getItem(syncStorageKey(userId));
+    const base = { status: navigator.onLine ? 'syncing' : 'offline', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
+    return raw ? { ...base, ...JSON.parse(raw) } : base;
+  } catch {
+    return { status: navigator.onLine ? 'syncing' : 'offline', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
+  }
+}
+
+function saveSyncMeta() {
+  if (!authSession?.user?.id) return;
+  localStorage.setItem(syncStorageKey(authSession.user.id), JSON.stringify(syncMeta));
+}
+
+function persist(options = {}) {
+  if (authSession?.user?.id) {
+    localStorage.setItem(userStorageKey(authSession.user.id), JSON.stringify(state));
+    if (options.sync !== false) {
+      syncMeta.pending = true;
+      syncMeta.status = navigator.onLine ? 'pending' : 'offline';
+      syncMeta.message = navigator.onLine ? 'Alterações aguardando sincronização.' : 'Sem internet. Alterações salvas neste dispositivo.';
+      saveSyncMeta();
+      scheduleCloudSync();
+    }
+  } else {
+    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(state));
+  }
   applyTheme();
+  updateSyncIndicator();
+}
+
+function deviceName() {
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isWindows = /windows/i.test(navigator.userAgent);
+  if (isIOS) return 'iPhone/iPad';
+  if (isWindows) return 'Windows';
+  return navigator.platform || 'Navegador';
+}
+
+function syncStatusInfo() {
+  if (!authSession) return { icon: '☁', label: 'Desconectado', tone: 'ignored' };
+  if (!navigator.onLine || syncMeta.status === 'offline') return { icon: '◌', label: 'Offline', tone: 'pending' };
+  if (syncMeta.status === 'conflict') return { icon: '!', label: 'Conflito', tone: 'ignored' };
+  if (syncMeta.status === 'error') return { icon: '!', label: 'Erro', tone: 'ignored' };
+  if (syncMeta.status === 'syncing' || syncMeta.status === 'pending') return { icon: '↻', label: 'Sincronizando', tone: 'pending' };
+  return { icon: '✓', label: 'Sincronizado', tone: 'confirmed' };
+}
+
+function updateSyncIndicator() {
+  const info = syncStatusInfo();
+  document.querySelectorAll('[data-sync-indicator]').forEach(el => {
+    el.textContent = info.icon;
+    el.title = info.label;
+    el.setAttribute('aria-label', info.label);
+  });
+  const label = document.querySelector('[data-sync-label]');
+  if (label) {
+    label.textContent = info.label;
+    label.className = `chip ${info.tone}`;
+  }
+}
+
+function scheduleCloudSync(delay = 650) {
+  clearTimeout(syncTimer);
+  if (!authSession || !navigator.onLine) return;
+  syncTimer = setTimeout(() => pushStateToCloud(), delay);
+}
+
+async function fetchRemoteState() {
+  if (!authSession?.user?.id || !supabaseClient) return { row: null, error: null };
+  const { data, error } = await supabaseClient
+    .from(REMOTE_TABLE)
+    .select('user_id,data,version,updated_at,device_name')
+    .eq('user_id', authSession.user.id)
+    .maybeSingle();
+  return { row: data, error };
+}
+
+async function pushStateToCloud({ force = false } = {}) {
+  if (!authSession?.user?.id || !supabaseClient) return;
+  if (!navigator.onLine) {
+    syncMeta.status = 'offline';
+    syncMeta.pending = true;
+    saveSyncMeta();
+    updateSyncIndicator();
+    return;
+  }
+
+  syncMeta.status = 'syncing';
+  syncMeta.message = 'Enviando alterações para a nuvem...';
+  saveSyncMeta();
+  updateSyncIndicator();
+
+  try {
+    const { row: remote, error: readError } = await fetchRemoteState();
+    if (readError) throw readError;
+
+    if (!force && remote?.updated_at && syncMeta.lastRemoteUpdatedAt && remote.updated_at !== syncMeta.lastRemoteUpdatedAt) {
+      syncMeta.status = 'conflict';
+      syncMeta.pending = true;
+      syncMeta.message = 'Há alterações mais recentes em outro dispositivo. Escolha qual versão manter em Configurações.';
+      saveSyncMeta();
+      render();
+      return;
+    }
+
+    const nextVersion = Math.max(Number(remote?.version || 0), Number(syncMeta.remoteVersion || 0)) + 1;
+    const updatedAt = new Date().toISOString();
+    const { data, error } = await supabaseClient
+      .from(REMOTE_TABLE)
+      .upsert({
+        user_id: authSession.user.id,
+        data: state,
+        version: nextVersion,
+        updated_at: updatedAt,
+        device_name: deviceName()
+      }, { onConflict: 'user_id' })
+      .select('version,updated_at')
+      .single();
+    if (error) throw error;
+
+    syncMeta.status = 'synced';
+    syncMeta.pending = false;
+    syncMeta.lastSyncedAt = new Date().toISOString();
+    syncMeta.lastRemoteUpdatedAt = data.updated_at;
+    syncMeta.remoteVersion = Number(data.version || nextVersion);
+    syncMeta.message = 'Todos os dados estão sincronizados.';
+    saveSyncMeta();
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    updateSyncIndicator();
+  } catch (error) {
+    console.error('Falha na sincronização:', error);
+    syncMeta.status = navigator.onLine ? 'error' : 'offline';
+    syncMeta.pending = true;
+    syncMeta.message = error?.message || 'Não foi possível sincronizar agora.';
+    saveSyncMeta();
+    updateSyncIndicator();
+  }
+}
+
+async function pullStateFromCloud({ force = false, quiet = false } = {}) {
+  if (!authSession?.user?.id || !supabaseClient || !navigator.onLine) return false;
+  if (syncMeta.pending && !force) return false;
+
+  if (!quiet) {
+    syncMeta.status = 'syncing';
+    syncMeta.message = 'Verificando dados na nuvem...';
+    updateSyncIndicator();
+  }
+
+  try {
+    const { row, error } = await fetchRemoteState();
+    if (error) throw error;
+    if (!row) {
+      await pushStateToCloud({ force: true });
+      return true;
+    }
+
+    const changed = !syncMeta.lastRemoteUpdatedAt || row.updated_at !== syncMeta.lastRemoteUpdatedAt;
+    if (changed || force) {
+      state = normalizeState(row.data || {});
+      localStorage.setItem(userStorageKey(authSession.user.id), JSON.stringify(state));
+      syncMeta.lastRemoteUpdatedAt = row.updated_at || '';
+      syncMeta.remoteVersion = Number(row.version || 0);
+    }
+    syncMeta.status = 'synced';
+    syncMeta.pending = false;
+    syncMeta.lastSyncedAt = new Date().toISOString();
+    syncMeta.message = changed ? 'Dados atualizados a partir da nuvem.' : 'Todos os dados estão sincronizados.';
+    saveSyncMeta();
+    if (changed) render(); else updateSyncIndicator();
+    return changed;
+  } catch (error) {
+    console.error('Falha ao baixar dados da nuvem:', error);
+    syncMeta.status = 'error';
+    syncMeta.message = error?.message || 'Não foi possível consultar a nuvem.';
+    saveSyncMeta();
+    updateSyncIndicator();
+    return false;
+  }
+}
+
+async function initialCloudSync() {
+  if (!authSession?.user?.id) return;
+  if (!navigator.onLine) {
+    syncMeta.status = 'offline';
+    syncMeta.message = 'Offline. Usando os dados salvos neste dispositivo.';
+    saveSyncMeta();
+    render();
+    return;
+  }
+
+  syncMeta.status = 'syncing';
+  render();
+  try {
+    const { row, error } = await fetchRemoteState();
+    if (error) throw error;
+
+    if (row) {
+      if (syncMeta.pending && syncMeta.lastRemoteUpdatedAt && row.updated_at !== syncMeta.lastRemoteUpdatedAt) {
+        syncMeta.status = 'conflict';
+        syncMeta.message = 'Este dispositivo e a nuvem têm alterações diferentes.';
+      } else if (syncMeta.pending) {
+        await pushStateToCloud();
+        return;
+      } else {
+        state = normalizeState(row.data || {});
+        localStorage.setItem(userStorageKey(authSession.user.id), JSON.stringify(state));
+        syncMeta.status = 'synced';
+        syncMeta.pending = false;
+        syncMeta.lastRemoteUpdatedAt = row.updated_at || '';
+        syncMeta.remoteVersion = Number(row.version || 0);
+        syncMeta.lastSyncedAt = new Date().toISOString();
+        syncMeta.message = 'Dados carregados da nuvem.';
+      }
+    } else {
+      await pushStateToCloud({ force: true });
+      return;
+    }
+    saveSyncMeta();
+    render();
+  } catch (error) {
+    console.error('Falha ao iniciar sincronização:', error);
+    syncMeta.status = 'error';
+    syncMeta.pending = true;
+    syncMeta.message = error?.message || 'Não foi possível acessar a nuvem.';
+    saveSyncMeta();
+    render();
+  }
 }
 
 function applyTheme() {
@@ -258,12 +516,12 @@ function pageShell(content, extraAction = '') {
       <nav class="nav">
         ${NAV_ITEMS.map(([page, icon, label]) => `<button class="nav-button ${ui.page === page ? 'active' : ''}" data-page="${page}"><span class="nav-icon">${icon}</span>${label}</button>`).join('')}
       </nav>
-      <div class="sidebar-footer"><strong>Dados privados no dispositivo.</strong><br>Faça cópias de segurança periódicas em Configurações.</div>
+      <div class="sidebar-footer"><strong>☁ Sincronização segura.</strong><br>${esc(authSession?.user?.email || '')}</div>
     </aside>
     <main class="main">
       <header class="topbar">
         <div><h1 class="page-title">${title}</h1><p class="page-subtitle">${subtitle}</p></div>
-        <div class="top-actions">${monthControl}${extraAction}<button class="icon-button" data-page="settings" aria-label="Configurações">⚙</button></div>
+        <div class="top-actions">${monthControl}${extraAction}<button class="icon-button" data-action="sync-now" data-sync-indicator aria-label="Sincronizar">${syncStatusInfo().icon}</button><button class="icon-button" data-page="settings" aria-label="Configurações">⚙</button></div>
       </header>
       ${installHelp()}
       ${content}
@@ -286,6 +544,14 @@ function installHelp() {
 function render() {
   applyTheme();
   const app = document.getElementById('app');
+  if (!authReady) {
+    app.innerHTML = `<main class="auth-shell"><section class="auth-card"><div class="auth-brand"><div class="brand-mark">R$</div><div><h1>Meu Financeiro</h1><p>Preparando seu acesso seguro...</p></div></div><div class="auth-loading">Sincronizando configuração</div></section></main>`;
+    return;
+  }
+  if (!authSession) {
+    app.innerHTML = renderAuth();
+    return;
+  }
   let content = '';
   if (ui.page === 'dashboard') content = renderDashboard();
   if (ui.page === 'transactions') content = renderTransactions();
@@ -294,6 +560,22 @@ function render() {
   if (ui.page === 'reports') content = renderReports();
   if (ui.page === 'settings') content = renderSettings();
   app.innerHTML = content;
+  updateSyncIndicator();
+}
+
+function renderAuth() {
+  const mode = ui.authMode;
+  const message = ui.authMessage ? `<div class="auth-message">${esc(ui.authMessage)}</div>` : '';
+  if (mode === 'forgot') {
+    return `<main class="auth-shell"><section class="auth-card"><div class="auth-brand"><div class="brand-mark">R$</div><div><h1>Recuperar senha</h1><p>Enviaremos um link para o seu e-mail.</p></div></div>${message}<form id="forgot-form" class="auth-form"><div class="field"><label>E-mail</label><input class="input" name="email" type="email" autocomplete="email" required></div><button class="button primary auth-submit" type="submit">Enviar link de recuperação</button></form><button class="auth-link" type="button" data-action="auth-mode" data-mode="signin">Voltar para entrar</button></section></main>`;
+  }
+  if (mode === 'signup') {
+    return `<main class="auth-shell"><section class="auth-card"><div class="auth-brand"><div class="brand-mark">R$</div><div><h1>Criar conta</h1><p>Use o mesmo login em todos os seus dispositivos.</p></div></div>${message}<form id="signup-form" class="auth-form"><div class="field"><label>E-mail</label><input class="input" name="email" type="email" autocomplete="email" required></div><div class="field"><label>Senha</label><input class="input" name="password" type="password" autocomplete="new-password" minlength="8" required></div><div class="field"><label>Confirmar senha</label><input class="input" name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required></div><button class="button primary auth-submit" type="submit">Criar conta</button></form><button class="auth-link" type="button" data-action="auth-mode" data-mode="signin">Já tenho uma conta</button></section></main>`;
+  }
+  if (mode === 'recovery') {
+    return `<main class="auth-shell"><section class="auth-card"><div class="auth-brand"><div class="brand-mark">R$</div><div><h1>Nova senha</h1><p>Defina a nova senha da sua conta.</p></div></div>${message}<form id="recovery-form" class="auth-form"><div class="field"><label>Nova senha</label><input class="input" name="password" type="password" autocomplete="new-password" minlength="8" required></div><div class="field"><label>Confirmar senha</label><input class="input" name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required></div><button class="button primary auth-submit" type="submit">Atualizar senha</button></form></section></main>`;
+  }
+  return `<main class="auth-shell"><section class="auth-card"><div class="auth-brand"><div class="brand-mark">R$</div><div><h1>Meu Financeiro</h1><p>Seus dados financeiros sincronizados entre dispositivos.</p></div></div>${message}<form id="signin-form" class="auth-form"><div class="field"><label>E-mail</label><input class="input" name="email" type="email" autocomplete="email" required></div><div class="field"><label>Senha</label><input class="input" name="password" type="password" autocomplete="current-password" required></div><button class="button primary auth-submit" type="submit">Entrar</button></form><div class="auth-actions"><button class="auth-link" type="button" data-action="auth-mode" data-mode="forgot">Esqueci minha senha</button><button class="auth-link" type="button" data-action="auth-mode" data-mode="signup">Criar conta</button></div><div class="auth-security">☁ Dados na nuvem + cópia local para uso offline.</div></section></main>`;
 }
 
 function renderDashboard() {
@@ -499,25 +781,39 @@ function renderReports() {
 }
 
 function renderSettings() {
+  const info = syncStatusInfo();
+  const lastSync = syncMeta.lastSyncedAt ? shortDate.format(new Date(syncMeta.lastSyncedAt)) + ' ' + new Intl.DateTimeFormat('pt-BR',{hour:'2-digit',minute:'2-digit'}).format(new Date(syncMeta.lastSyncedAt)) : 'Ainda não sincronizado';
+  const conflictActions = syncMeta.status === 'conflict' ? `<div class="sync-conflict"><strong>Conflito de sincronização</strong><p>${esc(syncMeta.message)}</p><div class="toolbar"><button class="button primary" data-action="force-cloud">Usar versão deste dispositivo</button><button class="button" data-action="force-pull">Usar versão da nuvem</button></div></div>` : '';
   const content = `
     <article class="card">
+      <div class="card-header"><div><h2 class="card-title">Conta e sincronização</h2><p class="card-note">O mesmo login mantém os dados iguais no iPhone, Windows e outros dispositivos.</p></div><span class="chip ${info.tone}" data-sync-label>${info.label}</span></div>
+      <div class="stack">
+        <div class="list-row"><div><div class="row-title">Usuário</div><div class="row-subtitle">Conta conectada ao Supabase</div></div><strong>${esc(authSession?.user?.email || '')}</strong></div>
+        <div class="list-row"><div><div class="row-title">Última sincronização</div><div class="row-subtitle">${esc(syncMeta.message || 'Sincronização automática ativa.')}</div></div><strong>${esc(lastSync)}</strong></div>
+        <div class="list-row"><div><div class="row-title">Armazenamento</div><div class="row-subtitle">Nuvem central com cópia local para uso offline.</div></div><span class="chip confirmed">Supabase</span></div>
+      </div>
+      ${conflictActions}
+      <div class="toolbar" style="margin-top:14px"><button class="button primary" data-action="sync-now">Sincronizar agora</button><button class="button" data-action="force-pull">Recarregar da nuvem</button><button class="button" data-action="logout">Sair deste dispositivo</button></div>
+    </article>
+
+    <article class="card" style="margin-top:16px">
       <div class="setting-row"><div><div class="setting-title">Tema escuro</div><div class="setting-note">Adapta a interface para ambientes com pouca luz.</div></div><label class="switch"><input type="checkbox" id="dark-mode" ${state.preferences.darkMode ? 'checked' : ''}><span></span></label></div>
       <div class="setting-row"><div><div class="setting-title">Visão por caixa</div><div class="setting-note">Quando ativada, usa pagamento, recebimento ou vencimento; desativada, usa a data original da transação (competência).</div></div><label class="switch"><input type="checkbox" id="cash-basis" ${state.preferences.basis === 'cash' ? 'checked' : ''}><span></span></label></div>
       <div class="setting-row"><div><div class="setting-title">Nome do aplicativo</div><div class="setting-note">Personalize o título exibido na barra lateral.</div></div><div style="width:min(300px,45vw)"><input class="input" id="app-name" value="${esc(state.preferences.name || '')}" maxlength="40"></div></div>
     </article>
 
     <article class="card" style="margin-top:16px">
-      <div class="card-header"><div><h2 class="card-title">Dados e cópias de segurança</h2><p class="card-note">Os dados ficam no armazenamento local deste dispositivo.</p></div></div>
+      <div class="card-header"><div><h2 class="card-title">Backup e exportação</h2><p class="card-note">A nuvem sincroniza automaticamente, mas você ainda pode gerar uma cópia independente.</p></div></div>
       <div class="toolbar"><button class="button primary" data-action="backup-json">Baixar cópia JSON</button><button class="button" data-action="restore-json">Restaurar cópia</button><button class="button" data-action="export-csv">Exportar CSV</button><button class="button danger" data-action="reset-data">Apagar todos os dados</button></div>
     </article>
 
     <article class="card" style="margin-top:16px">
-      <div class="card-header"><div><h2 class="card-title">Privacidade e funcionamento</h2><p class="card-note">Aplicativo pessoal, local e com entradas manuais.</p></div></div>
+      <div class="card-header"><div><h2 class="card-title">Privacidade e funcionamento</h2><p class="card-note">Entradas manuais, autenticação e sincronização entre dispositivos.</p></div></div>
       <div class="stack">
-        <div class="list-row"><div><div class="row-title">Lançamentos</div><div class="row-subtitle">Ganhos, gastos, transferências e compras são cadastrados manualmente por você.</div></div><span class="chip confirmed">Manual</span></div>
-        <div class="list-row"><div><div class="row-title">Armazenamento</div><div class="row-subtitle">Os dados permanecem neste dispositivo; não há servidor nem conta de usuário.</div></div><span class="chip confirmed">Local</span></div>
-        <div class="list-row"><div><div class="row-title">Levar dados para outro aparelho</div><div class="row-subtitle">Gere uma cópia JSON e restaure-a no outro dispositivo quando desejar.</div></div><span class="chip pending">Backup</span></div>
-        <div class="list-row"><div><div class="row-title">Versão</div><div class="row-subtitle">Aplicativo Web Progressivo (PWA) compatível com iPhone e Windows 11.</div></div><strong>1.1.1</strong></div>
+        <div class="list-row"><div><div class="row-title">Lançamentos</div><div class="row-subtitle">Ganhos, gastos, transferências e compras são cadastrados manualmente.</div></div><span class="chip confirmed">Manual</span></div>
+        <div class="list-row"><div><div class="row-title">Segurança</div><div class="row-subtitle">O acesso aos dados depende do login e das regras RLS configuradas no Supabase.</div></div><span class="chip confirmed">RLS</span></div>
+        <div class="list-row"><div><div class="row-title">Modo offline</div><div class="row-subtitle">Alterações ficam salvas neste dispositivo e são enviadas quando a internet voltar.</div></div><span class="chip pending">Local + nuvem</span></div>
+        <div class="list-row"><div><div class="row-title">Versão</div><div class="row-subtitle">Aplicativo Web Progressivo (PWA) compatível com iPhone e Windows 11.</div></div><strong>${RELEASE_VERSION}</strong></div>
       </div>
     </article>`;
   return pageShell(content);
@@ -772,6 +1068,101 @@ async function installApp() {
   showToast(isIOS ? 'No Safari: Compartilhar → Adicionar à Tela de Início.' : 'No Edge: menu ⋯ → Aplicativos → Instalar este site como aplicativo.');
 }
 
+document.addEventListener('submit', async event => {
+  if (!['signin-form', 'signup-form', 'forgot-form', 'recovery-form'].includes(event.target.id)) return;
+  event.preventDefault();
+  if (!supabaseClient) return;
+  const form = event.target;
+  const values = Object.fromEntries(new FormData(form).entries());
+  const submit = form.querySelector('[type="submit"]');
+  if (submit) submit.disabled = true;
+  ui.authMessage = '';
+  try {
+    if (form.id === 'signin-form') {
+      const { data, error } = await supabaseClient.auth.signInWithPassword({ email: values.email.trim(), password: values.password });
+      if (error) throw error;
+      await activateSession(data.session);
+      showToast('Login realizado. Seus dados serão sincronizados.');
+    }
+    if (form.id === 'signup-form') {
+      if (values.password !== values.confirmPassword) throw new Error('As senhas não coincidem.');
+      const { data, error } = await supabaseClient.auth.signUp({
+        email: values.email.trim(),
+        password: values.password,
+        options: { emailRedirectTo: APP_URL }
+      });
+      if (error) throw error;
+      if (data.session) await activateSession(data.session);
+      else { ui.authMode = 'signin'; ui.authMessage = 'Conta criada. Confirme o e-mail antes de entrar.'; render(); }
+    }
+    if (form.id === 'forgot-form') {
+      const { error } = await supabaseClient.auth.resetPasswordForEmail(values.email.trim(), { redirectTo: APP_URL });
+      if (error) throw error;
+      ui.authMode = 'signin'; ui.authMessage = 'Enviamos um link de recuperação para o seu e-mail.'; render();
+    }
+    if (form.id === 'recovery-form') {
+      if (values.password !== values.confirmPassword) throw new Error('As senhas não coincidem.');
+      const { error } = await supabaseClient.auth.updateUser({ password: values.password });
+      if (error) throw error;
+      ui.authMode = 'signin'; ui.authMessage = '';
+      const { data } = await supabaseClient.auth.getSession();
+      if (data.session) await activateSession(data.session);
+      showToast('Senha atualizada com sucesso.');
+    }
+  } catch (error) {
+    ui.authMessage = authErrorMessage(error);
+    render();
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+});
+
+function authErrorMessage(error) {
+  const message = String(error?.message || error || 'Falha na autenticação.');
+  if (/invalid login credentials/i.test(message)) return 'E-mail ou senha incorretos.';
+  if (/email not confirmed/i.test(message)) return 'Confirme seu e-mail antes de entrar.';
+  if (/user already registered/i.test(message)) return 'Já existe uma conta com este e-mail.';
+  if (/password/i.test(message) && /characters|weak|short/i.test(message)) return 'Use uma senha mais forte, com pelo menos 8 caracteres.';
+  return message;
+}
+
+async function activateSession(session) {
+  if (!session?.user?.id) return;
+  authSession = session;
+  state = loadStateForUser(session.user.id);
+  syncMeta = loadSyncMeta(session.user.id);
+  authReady = true;
+  ui.authMode = 'signin';
+  ui.authMessage = '';
+  render();
+  await initialCloudSync();
+  startSyncPolling();
+}
+
+async function logoutCurrentDevice() {
+  if (syncMeta.pending && navigator.onLine) await pushStateToCloud();
+  const { error } = await supabaseClient.auth.signOut({ scope: 'local' });
+  if (error) { showToast('Não foi possível sair agora.'); return; }
+  stopSyncPolling();
+  authSession = null;
+  state = defaultState();
+  syncMeta = { status: 'local', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
+  ui.page = 'dashboard';
+  render();
+}
+
+function startSyncPolling() {
+  stopSyncPolling();
+  syncPollTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && navigator.onLine && authSession && !syncMeta.pending) pullStateFromCloud({ quiet: true });
+  }, 30000);
+}
+
+function stopSyncPolling() {
+  if (syncPollTimer) clearInterval(syncPollTimer);
+  syncPollTimer = null;
+}
+
 document.addEventListener('click', event => {
   const pageButton = event.target.closest('[data-page]');
   if (pageButton) { ui.page = pageButton.dataset.page; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -779,6 +1170,14 @@ document.addEventListener('click', event => {
   if (!button) return;
   const action = button.dataset.action;
   const id = button.dataset.id;
+  if (action === 'auth-mode') { ui.authMode = button.dataset.mode || 'signin'; ui.authMessage = ''; render(); return; }
+  if (action === 'sync-now') { if (syncMeta.pending) pushStateToCloud(); else pullStateFromCloud({ force: true }); return; }
+  if (action === 'force-cloud') { pushStateToCloud({ force: true }).then(() => render()); return; }
+  if (action === 'force-pull') {
+    if (syncMeta.pending && !window.confirm('Usar a versão da nuvem? Alterações ainda não sincronizadas deste dispositivo serão substituídas.')) return;
+    syncMeta.pending = false; saveSyncMeta(); pullStateFromCloud({ force: true }).then(() => render()); return;
+  }
+  if (action === 'logout') { logoutCurrentDevice(); return; }
   if (action === 'prev-month') { ui.month = shiftMonth(ui.month, -1); render(); }
   if (action === 'next-month') { ui.month = shiftMonth(ui.month, 1); render(); }
   if (action === 'close-modal') {
@@ -819,7 +1218,7 @@ document.addEventListener('click', event => {
   if (action === 'backup-json') backupJson();
   if (action === 'restore-json') document.getElementById('restore-file').click();
   if (action === 'reset-data') {
-    if (window.confirm('Apagar todos os dados financeiros deste dispositivo? Esta ação não pode ser desfeita sem uma cópia de segurança.')) {
+    if (window.confirm('Apagar todos os dados financeiros desta conta? A exclusão será sincronizada com os outros dispositivos e não pode ser desfeita sem uma cópia de segurança.')) {
       state = defaultState(); persist(); ui.month = monthKey(new Date()); render(); showToast('Todos os dados foram apagados.');
     }
   }
@@ -847,9 +1246,74 @@ window.addEventListener('appinstalled', () => {
   state.preferences.showInstallHelp = false; persist(); render(); showToast('Aplicativo instalado.');
 });
 
+window.addEventListener('online', () => {
+  if (!authSession) return;
+  syncMeta.status = syncMeta.pending ? 'pending' : 'syncing';
+  saveSyncMeta();
+  updateSyncIndicator();
+  if (syncMeta.pending) pushStateToCloud(); else pullStateFromCloud({ quiet: true });
+});
+
+window.addEventListener('offline', () => {
+  if (!authSession) return;
+  syncMeta.status = 'offline';
+  syncMeta.message = 'Sem internet. Seus dados continuam disponíveis neste dispositivo.';
+  saveSyncMeta();
+  updateSyncIndicator();
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && authSession && navigator.onLine && !syncMeta.pending) pullStateFromCloud({ quiet: true });
+});
+
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.error));
 }
 
-applyTheme();
-render();
+async function initializeApp() {
+  applyTheme();
+  render();
+  try {
+    const config = window.MEU_FINANCEIRO_CONFIG || {};
+    if (!window.supabase?.createClient) throw new Error('Biblioteca de sincronização não carregada. Verifique sua conexão com a internet.');
+    if (!config.supabaseUrl || !config.supabasePublishableKey) throw new Error('Configuração do Supabase ausente.');
+    supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabasePublishableKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    });
+
+    supabaseClient.auth.onAuthStateChange((event, session) => {
+      setTimeout(async () => {
+        if (event === 'PASSWORD_RECOVERY') {
+          authSession = session;
+          authReady = true;
+          ui.authMode = 'recovery';
+          render();
+          return;
+        }
+        if (event === 'SIGNED_OUT') {
+          stopSyncPolling();
+          authSession = null;
+          authReady = true;
+          state = defaultState();
+          render();
+          return;
+        }
+        if (session?.user?.id && (!authSession || authSession.user.id !== session.user.id)) await activateSession(session);
+      }, 0);
+    });
+
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
+    authReady = true;
+    if (data.session) await activateSession(data.session);
+    else render();
+  } catch (error) {
+    console.error(error);
+    authReady = true;
+    authSession = null;
+    ui.authMessage = error?.message || 'Não foi possível iniciar a sincronização.';
+    render();
+  }
+}
+
+initializeApp();

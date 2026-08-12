@@ -195,3 +195,29 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .month-label { min-width: 104px; font-size: .85rem; }
   .page-subtitle { font-size: .85rem; }
 }
+
+/* ===== Autenticação e sincronização — v1.2 ===== */
+.auth-shell { min-height: 100vh; width: 100%; display: grid; place-items: center; padding: calc(24px + var(--safe-top)) 18px calc(24px + var(--safe-bottom)); background: radial-gradient(circle at top right, var(--primary-soft), transparent 42%), var(--bg); }
+.auth-card { width: min(460px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 24px; padding: 24px; box-shadow: 0 24px 70px rgba(15, 48, 44, .14); }
+.auth-brand { display: flex; gap: 14px; align-items: center; margin-bottom: 22px; }
+.auth-brand .brand-mark { flex: 0 0 auto; }
+.auth-brand h1 { margin: 0; font-size: 1.65rem; letter-spacing: -.04em; }
+.auth-brand p { margin: 5px 0 0; color: var(--muted); line-height: 1.45; font-size: .9rem; }
+.auth-form { display: grid; gap: 14px; }
+.auth-submit { width: 100%; min-height: 48px; margin-top: 4px; }
+.auth-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; }
+.auth-link { border: 0; background: transparent; color: var(--primary-strong); padding: 6px 0; font-weight: 750; }
+.auth-message { margin-bottom: 16px; border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); background: var(--primary-soft); color: var(--primary-strong); border-radius: 12px; padding: 11px 12px; font-size: .86rem; line-height: 1.45; }
+.auth-security { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 15px; color: var(--muted); font-size: .8rem; text-align: center; }
+.auth-loading { color: var(--muted); padding: 22px 0 4px; text-align: center; }
+.sync-conflict { margin-top: 16px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border)); background: color-mix(in srgb, var(--warning) 9%, var(--surface)); border-radius: 14px; padding: 14px; }
+.sync-conflict p { color: var(--muted); margin: 6px 0 12px; font-size: .84rem; }
+.sync-conflict .toolbar { margin-bottom: 0; }
+[data-sync-indicator] { transition: transform .15s ease; }
+[data-sync-indicator]:active { transform: scale(.94); }
+
+@media (max-width: 480px) {
+  .auth-card { padding: 20px; border-radius: 20px; }
+  .auth-actions { align-items: flex-start; flex-direction: column; }
+  .auth-link { text-align: left; }
+}

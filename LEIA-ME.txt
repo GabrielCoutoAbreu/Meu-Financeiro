@@ -1,16 +1,26 @@
-CORREÇÃO MEU FINANCEIRO v1.1.1
+MEU FINANCEIRO v1.2.0 — SINCRONIZAÇÃO SUPABASE
 
-Arquivos a substituir na raiz do repositório GitHub:
+1. No repositório GitHub Meu-Financeiro, use Add file > Upload files.
+2. Envie TODOS os arquivos desta pasta para a raiz do repositório.
+3. Quando o GitHub perguntar, confirme a substituição dos arquivos existentes.
+4. Faça Commit changes na branch main.
+5. Aguarde o GitHub Pages publicar a atualização.
+6. No iPhone, feche completamente o Meu Financeiro e abra de novo.
+   Se a tela antiga persistir, abra o endereço no Safari e atualize uma vez.
+
+ARQUIVOS NOVOS:
+- config.js
+- icon-192.png
+- icon-512.png
+
+ARQUIVOS SUBSTITUÍDOS:
 - app.js
 - index.html
+- styles.css
 - sw.js
+- manifest.webmanifest
 
-Correção:
-- botão X das janelas modais;
-- botão Cancelar;
-- toque no fundo escurecido fecha a janela;
-- toque dentro da janela não fecha acidentalmente;
-- atualização de cache do PWA para v1.1.1.
-
-No GitHub, apague/substitua os três arquivos antigos na raiz e faça commit.
-Depois aguarde o GitHub Pages publicar a nova versão.
+IMPORTANTE:
+- O config.js contém apenas Project URL e Publishable Key do Supabase. Esses valores são públicos por projeto e foram feitos para uso no cliente, desde que RLS esteja corretamente configurado.
+- Nunca coloque service_role ou sb_secret_... no GitHub.
+- O aplicativo mantém uma cópia local para uso offline e sincroniza automaticamente quando houver internet.
