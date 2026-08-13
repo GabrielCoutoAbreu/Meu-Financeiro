@@ -260,3 +260,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .pluggy-row { align-items: flex-start; }
   .pluggy-row > .chip { flex: 0 0 auto; }
 }
+
+/* Open Finance integrado — v1.4 */
+.open-finance-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.open-finance-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: .8rem; }
+.open-finance-summary span { background: var(--surface-2); border-radius: 999px; padding: 6px 10px; }
+.open-finance-summary strong { color: var(--text); }
+.open-finance-account { border-color: color-mix(in srgb, var(--primary) 22%, var(--border)); }
+
+@media (max-width: 720px) {
+  .open-finance-actions { display: grid; grid-template-columns: 1fr; width: 100%; }
+  .open-finance-actions .button { width: 100%; }
+  .open-finance-summary { display: grid; grid-template-columns: 1fr; }
+}

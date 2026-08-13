@@ -1,10 +1,12 @@
 'use strict';
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
-const APP_VERSION = 3;
-const RELEASE_VERSION = '1.3.0';
+const APP_VERSION = 4;
+const RELEASE_VERSION = '1.4.0';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
+const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
+const PLUGGY_TRANSACTIONS_TABLE = 'pluggy_transactions';
 const APP_URL = 'https://gabrielcoutoabreu.github.io/Meu-Financeiro/';
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -34,6 +36,12 @@ let authReady = false;
 let supabaseClient = null;
 let pluggyItems = [];
 let pluggyItemsLoading = false;
+let pluggyAccounts = [];
+let pluggyTransactions = [];
+let pluggyDataLoading = false;
+let pluggyAccountMap = new Map();
+let pluggyNeutralBankIds = new Set();
+let pluggySuppressedIds = new Set();
 let syncTimer = null;
 let syncPollTimer = null;
 let syncMeta = { status: 'local', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
@@ -426,6 +434,118 @@ function applyTheme() {
   if (themeMeta) themeMeta.content = state.preferences.darkMode ? '#172221' : '#0f766e';
 }
 
+function pluggyDateLocal(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(date);
+  const get = type => parts.find(part => part.type === type)?.value || '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+function simpleDate(value) {
+  if (!value) return '';
+  const match = String(value).match(/\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : '';
+}
+
+function rebuildOpenFinanceIndexes() {
+  pluggyAccountMap = new Map(pluggyAccounts.map(account => [account.pluggy_account_id, account]));
+  pluggyNeutralBankIds = new Set();
+  pluggySuppressedIds = new Set();
+
+  const cardCredits = pluggyTransactions.filter(row => {
+    const account = pluggyAccountMap.get(row.pluggy_account_id);
+    return account?.type === 'CREDIT' && num(row.amount) < 0;
+  });
+  const usedCardCredits = new Set();
+
+  pluggyTransactions.forEach(row => {
+    const account = pluggyAccountMap.get(row.pluggy_account_id);
+    if (account?.type !== 'BANK' || String(row.transaction_type || '').toUpperCase() !== 'DEBIT') return;
+
+    const description = `${row.description || ''} ${row.description_raw || ''}`.toLowerCase();
+    const explicitCardPayment = /(pagamento|pagto|pgto|pgt).*?(cart[aã]o|fatura)|(cart[aã]o|fatura).*?(pagamento|pagto|pgto|pgt)/i.test(description);
+    const amount = Math.abs(num(row.amount));
+    const time = new Date(row.transaction_date).getTime();
+
+    let matched = null;
+    if (amount > 0 && Number.isFinite(time)) {
+      matched = cardCredits.find(other => {
+        if (usedCardCredits.has(other.pluggy_transaction_id)) return false;
+        const otherTime = new Date(other.transaction_date).getTime();
+        return Math.abs(Math.abs(num(other.amount)) - amount) < 0.01 && Math.abs(otherTime - time) <= 3 * 86400000;
+      });
+    }
+
+    if (explicitCardPayment || matched) pluggyNeutralBankIds.add(row.pluggy_transaction_id);
+    if (matched) {
+      pluggySuppressedIds.add(matched.pluggy_transaction_id);
+      usedCardCredits.add(matched.pluggy_transaction_id);
+    }
+  });
+}
+
+function normalizePluggyTransaction(row) {
+  const account = pluggyAccountMap.get(row.pluggy_account_id);
+  if (!account || pluggySuppressedIds.has(row.pluggy_transaction_id)) return null;
+
+  const signedAmount = num(row.amount);
+  const amount = Math.abs(signedAmount);
+  const accountType = String(account.type || '').toUpperCase();
+  const txType = String(row.transaction_type || '').toUpperCase();
+  let type = 'expense';
+
+  if (accountType === 'CREDIT') {
+    type = signedAmount > 0 ? 'card' : 'card_payment';
+  } else if (pluggyNeutralBankIds.has(row.pluggy_transaction_id)) {
+    type = 'card_payment';
+  } else {
+    type = txType === 'CREDIT' ? 'income' : 'expense';
+  }
+
+  const date = pluggyDateLocal(row.transaction_date);
+  const dueDate = simpleDate(row.bill_forecast_date) || date;
+  const status = String(row.status || '').toUpperCase() === 'POSTED' ? 'confirmed' : 'pending';
+  const defaultCategory = type === 'card_payment' ? 'Transferência' : 'Sem categoria';
+
+  return {
+    id: `pluggy:${row.pluggy_transaction_id}`,
+    pluggyId: row.pluggy_transaction_id,
+    description: row.description || row.description_raw || 'Movimentação Open Finance',
+    amount,
+    type,
+    date,
+    dueDate,
+    paidDate: '',
+    accountId: accountType === 'BANK' ? `pluggy-account:${row.pluggy_account_id}` : '',
+    destinationAccountId: '',
+    cardId: accountType === 'CREDIT' ? `pluggy-card:${row.pluggy_account_id}` : '',
+    category: row.category || defaultCategory,
+    subcategory: '',
+    member: '',
+    tags: [],
+    status,
+    paymentMethod: 'Open Finance',
+    installmentCurrent: row.installment_number || 1,
+    installmentTotal: row.total_installments || 1,
+    notes: '',
+    origin: 'openfinance',
+    sourceLabel: account.name || account.institution_name || 'Open Finance',
+    readOnly: true
+  };
+}
+
+function openFinanceTransactions() {
+  return pluggyTransactions.map(normalizePluggyTransaction).filter(Boolean);
+}
+
+function allTransactions() {
+  return [...state.transactions, ...openFinanceTransactions()];
+}
+
 function transactionViewDate(tx) {
   if (state.preferences.basis === 'cash') return tx.paidDate || tx.dueDate || tx.date;
   return tx.date;
@@ -454,7 +574,7 @@ function accountBalance(accountId) {
 }
 
 function monthTransactions(key = ui.month, includePending = true) {
-  return state.transactions.filter(tx => {
+  return allTransactions().filter(tx => {
     if (!validForCalculations(tx)) return false;
     if (!includePending && tx.status !== 'confirmed') return false;
     return isInMonth(transactionViewDate(tx), key);
@@ -489,9 +609,11 @@ function cardInvoice(cardId, key = ui.month) {
 }
 
 function totalNetWorth() {
-  const accounts = state.accounts.reduce((sum, account) => sum + accountBalance(account.id), 0);
-  const cards = state.cards.reduce((sum, card) => sum + cardInvoice(card.id), 0);
-  return accounts - cards;
+  const manualAccounts = state.accounts.reduce((sum, account) => sum + accountBalance(account.id), 0);
+  const manualCards = state.cards.reduce((sum, card) => sum + cardInvoice(card.id), 0);
+  const bankBalances = pluggyAccounts.filter(account => String(account.type).toUpperCase() === 'BANK').reduce((sum, account) => sum + num(account.balance), 0);
+  const creditBalances = pluggyAccounts.filter(account => String(account.type).toUpperCase() === 'CREDIT').reduce((sum, account) => sum + Math.max(0, num(account.balance)), 0);
+  return manualAccounts + bankBalances - manualCards - creditBalances;
 }
 
 function nameById(collection, id, fallback = '—') {
@@ -499,11 +621,11 @@ function nameById(collection, id, fallback = '—') {
 }
 
 function typeLabel(type) {
-  return { income: 'Ganho', expense: 'Gasto', transfer: 'Transferência', card: 'Cartão' }[type] || type;
+  return { income: 'Ganho', expense: 'Gasto', transfer: 'Transferência', card: 'Cartão', card_payment: 'Pagamento do cartão' }[type] || type;
 }
 
 function typeIcon(type) {
-  return { income: '↓', expense: '↑', transfer: '⇄', card: '▰' }[type] || '•';
+  return { income: '↓', expense: '↑', transfer: '⇄', card: '▰', card_payment: '✓' }[type] || '•';
 }
 
 function pageShell(content, extraAction = '') {
@@ -593,18 +715,18 @@ function renderDashboard() {
   const maxCategory = Math.max(1, ...categories.map(item => item.total));
   const budgets = state.budgets.filter(item => item.month === ui.month).slice(0, 4);
   const recent = monthTransactions().sort((a, b) => (transactionViewDate(b) || '').localeCompare(transactionViewDate(a) || '')).slice(0, 6);
-  const pending = monthTransactions().filter(tx => tx.status === 'pending').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const pending = monthTransactions().filter(tx => tx.status === 'pending' && ['income','expense','card'].includes(tx.type)).reduce((sum, tx) => sum + num(tx.amount), 0);
   const resultChange = previous.result ? ((totals.result - previous.result) / Math.abs(previous.result)) * 100 : 0;
-  const gettingStarted = state.accounts.length === 0 && state.transactions.length === 0 ? `
+  const gettingStarted = state.accounts.length === 0 && state.transactions.length === 0 && pluggyAccounts.length === 0 ? `
     <article class="card getting-started" style="margin-bottom:16px">
-      <div class="card-header"><div><h2 class="card-title">Comece por aqui</h2><p class="card-note">Este aplicativo trabalha com lançamentos manuais. Cadastre primeiro suas contas e, se desejar, seus cartões.</p></div></div>
-      <div class="toolbar"><button class="button primary" data-action="add-account">+ Cadastrar conta</button><button class="button" data-action="add-card">+ Cadastrar cartão</button></div>
+      <div class="card-header"><div><h2 class="card-title">Comece por aqui</h2><p class="card-note">Cadastre contas manualmente ou conecte seu banco pelo Open Finance.</p></div></div>
+      <div class="toolbar"><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button><button class="button" data-action="add-account">+ Conta manual</button></div>
     </article>` : '';
 
   const content = `
     ${gettingStarted}
     <section class="grid kpis">
-      ${kpi('Patrimônio líquido', money.format(totalNetWorth()), `${state.accounts.length} contas e ${state.cards.length} cartões`, totalNetWorth() >= 0 ? 'positive' : 'negative')}
+      ${kpi('Patrimônio líquido', money.format(totalNetWorth()), `${state.accounts.length + pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'BANK').length} contas e ${state.cards.length + pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'CREDIT').length} cartões`, totalNetWorth() >= 0 ? 'positive' : 'negative')}
       ${kpi('Ganhos confirmados', money.format(totals.income), 'No período selecionado', 'positive')}
       ${kpi('Gastos confirmados', money.format(totals.expense), `${state.preferences.basis === 'cash' ? 'Visão por caixa' : 'Visão por competência'}`, 'negative')}
       ${kpi('Resultado do mês', money.format(totals.result), `${resultChange >= 0 ? '+' : ''}${resultChange.toFixed(0)}% versus mês anterior`, totals.result >= 0 ? 'positive' : 'negative')}
@@ -665,7 +787,7 @@ function budgetAlerts() {
 
 function renderTransactions() {
   const search = ui.transactionSearch.trim().toLowerCase();
-  const rows = state.transactions
+  const rows = allTransactions()
     .filter(tx => isInMonth(transactionViewDate(tx)))
     .filter(tx => ui.transactionType === 'all' || tx.type === ui.transactionType)
     .filter(tx => ui.transactionStatus === 'all' || tx.status === ui.transactionStatus)
@@ -677,7 +799,7 @@ function renderTransactions() {
       <div class="toolbar">
         <input class="input search" id="transaction-search" placeholder="Buscar descrição, categoria, membro ou tag" value="${esc(ui.transactionSearch)}">
         <select class="select filter-select" id="transaction-type-filter">
-          ${selectOptions([['all','Todos os tipos'],['income','Ganhos'],['expense','Gastos'],['card','Cartão'],['transfer','Transferências']], ui.transactionType)}
+          ${selectOptions([['all','Todos os tipos'],['income','Ganhos'],['expense','Gastos'],['card','Cartão'],['card_payment','Pagamento cartão'],['transfer','Transferências']], ui.transactionType)}
         </select>
         <select class="select filter-select" id="transaction-status-filter">
           ${selectOptions([['all','Todas as situações'],['confirmed','Confirmadas'],['pending','Pendentes'],['ignored','Ignoradas']], ui.transactionStatus)}
@@ -692,16 +814,20 @@ function renderTransactions() {
 
 function renderTransactionRow(tx, actions = false) {
   const isPositive = tx.type === 'income';
-  const isNeutral = tx.type === 'transfer';
+  const isNeutral = tx.type === 'transfer' || tx.type === 'card_payment';
   const date = transactionViewDate(tx);
-  const source = tx.type === 'card' ? nameById(state.cards, tx.cardId, 'Cartão') : nameById(state.accounts, tx.accountId, 'Sem conta');
+  const source = tx.origin === 'openfinance'
+    ? (tx.sourceLabel || 'Open Finance')
+    : (tx.type === 'card' ? nameById(state.cards, tx.cardId, 'Cartão') : nameById(state.accounts, tx.accountId, 'Sem conta'));
   const installment = num(tx.installmentTotal) > 1 ? ` · ${tx.installmentCurrent}/${tx.installmentTotal}` : '';
-  const subtitle = `${typeLabel(tx.type)} · ${esc(tx.category || 'Sem categoria')} · ${esc(source)}${installment}`;
-  const valueClass = isNeutral ? '' : isPositive ? 'positive' : 'negative';
-  const sign = isPositive ? '+' : isNeutral ? '' : '−';
+  const origin = tx.origin === 'openfinance' ? ' · Open Finance' : ' · Manual';
+  const subtitle = `${typeLabel(tx.type)} · ${esc(tx.category || 'Sem categoria')} · ${esc(source)}${installment}${origin}`;
+  const valueClass = tx.type === 'card_payment' ? 'positive' : isNeutral ? '' : isPositive ? 'positive' : 'negative';
+  const sign = isPositive ? '+' : tx.type === 'card_payment' ? '−' : isNeutral ? '' : '−';
+  const canEdit = actions && !tx.readOnly && tx.origin !== 'openfinance';
   return `<div class="list-row">
     <div class="row-main"><div class="avatar">${typeIcon(tx.type)}</div><div><div class="row-title">${esc(tx.description)}</div><div class="row-subtitle">${subtitle} · ${date ? shortDate.format(parseDate(date)) : 'Sem data'}</div></div></div>
-    <div class="row-actions"><div style="text-align:right"><div class="row-value ${valueClass}">${sign}${money.format(tx.amount)}</div><span class="chip ${tx.status}">${tx.status === 'confirmed' ? 'Confirmada' : tx.status === 'pending' ? 'Pendente' : 'Ignorada'}</span></div>${actions ? `<button class="icon-button" data-action="edit-transaction" data-id="${tx.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-transaction" data-id="${tx.id}" aria-label="Excluir">×</button>` : ''}</div>
+    <div class="row-actions"><div style="text-align:right"><div class="row-value ${valueClass}">${sign}${money.format(tx.amount)}</div><span class="chip ${tx.status}">${tx.status === 'confirmed' ? 'Confirmada' : tx.status === 'pending' ? 'Pendente' : 'Ignorada'}</span></div>${canEdit ? `<button class="icon-button" data-action="edit-transaction" data-id="${tx.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-transaction" data-id="${tx.id}" aria-label="Excluir">×</button>` : ''}</div>
   </div>`;
 }
 
@@ -723,27 +849,67 @@ function renderPluggyConnections() {
   }).join('')}</div>`;
 }
 
-function renderPatrimony() {
-  const accountCards = state.accounts.map(account => `<article class="card account-card"><div class="card-header"><div><h2 class="card-title">${esc(account.name)}</h2><p class="card-note">${esc(account.type)}${account.institution ? ` · ${esc(account.institution)}` : ''}</p></div><div class="row-actions"><button class="icon-button" data-action="edit-account" data-id="${account.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-account" data-id="${account.id}" aria-label="Excluir">×</button></div></div><div class="account-balance ${accountBalance(account.id) >= 0 ? 'positive' : 'negative'}">${money.format(accountBalance(account.id))}</div><div class="card-note">Saldo inicial: ${money.format(account.initialBalance)}</div></article>`).join('');
+function accountSubtypeLabel(value) {
+  const key = String(value || '').toUpperCase();
+  return {
+    CHECKING_ACCOUNT: 'Conta-corrente',
+    SAVINGS_ACCOUNT: 'Poupança',
+    CREDIT_CARD: 'Cartão de crédito'
+  }[key] || String(value || '').replaceAll('_', ' ').toLowerCase().replace(/^./, c => c.toUpperCase()) || 'Conta bancária';
+}
 
-  const cardCards = state.cards.map(card => {
+function renderPatrimony() {
+  const manualAccountCards = state.accounts.map(account => `<article class="card account-card"><div class="card-header"><div><h2 class="card-title">${esc(account.name)}</h2><p class="card-note">${esc(account.type)}${account.institution ? ` · ${esc(account.institution)}` : ''} · Manual</p></div><div class="row-actions"><button class="icon-button" data-action="edit-account" data-id="${account.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-account" data-id="${account.id}" aria-label="Excluir">×</button></div></div><div class="account-balance ${accountBalance(account.id) >= 0 ? 'positive' : 'negative'}">${money.format(accountBalance(account.id))}</div><div class="card-note">Saldo inicial: ${money.format(account.initialBalance)}</div></article>`).join('');
+
+  const manualCardCards = state.cards.map(card => {
     const invoice = cardInvoice(card.id);
     const available = card.limit - invoice;
-    return `<article class="card credit-card"><div class="card-header"><div><div class="card-brand">${esc(card.brand || 'Cartão')}</div><h2 class="card-title">${esc(card.name)}</h2></div><div class="row-actions"><button class="icon-button" data-action="edit-card" data-id="${card.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-card" data-id="${card.id}" aria-label="Excluir">×</button></div></div><div class="card-limit">${money.format(invoice)}</div><div class="card-note">Fatura de ${esc(formatMonthShort(ui.month))}</div><div class="progress-row" style="margin-top:16px"><div class="progress-meta"><span>Limite disponível</span><strong class="${available < 0 ? 'negative' : ''}">${money.format(available)}</strong></div><div class="progress ${invoice > card.limit ? 'danger' : invoice / card.limit >= .8 ? 'warning' : ''}"><span style="width:${clamp((invoice / card.limit) * 100, 0, 100)}%"></span></div><div class="card-note">Fecha dia ${card.closingDay} · vence dia ${card.dueDay} · paga por ${esc(nameById(state.accounts, card.linkedAccountId))}</div></div></article>`;
+    return `<article class="card credit-card"><div class="card-header"><div><div class="card-brand">${esc(card.brand || 'Cartão')} · Manual</div><h2 class="card-title">${esc(card.name)}</h2></div><div class="row-actions"><button class="icon-button" data-action="edit-card" data-id="${card.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-card" data-id="${card.id}" aria-label="Excluir">×</button></div></div><div class="card-limit">${money.format(invoice)}</div><div class="card-note">Fatura de ${esc(formatMonthShort(ui.month))}</div><div class="progress-row" style="margin-top:16px"><div class="progress-meta"><span>Limite disponível</span><strong class="${available < 0 ? 'negative' : ''}">${money.format(available)}</strong></div><div class="progress ${invoice > card.limit ? 'danger' : invoice / card.limit >= .8 ? 'warning' : ''}"><span style="width:${clamp((invoice / card.limit) * 100, 0, 100)}%"></span></div><div class="card-note">Fecha dia ${card.closingDay} · vence dia ${card.dueDay} · paga por ${esc(nameById(state.accounts, card.linkedAccountId))}</div></div></article>`;
   }).join('');
+
+  const openBankCards = pluggyAccounts.filter(account => String(account.type).toUpperCase() === 'BANK').map(account => `<article class="card account-card open-finance-account"><div class="card-header"><div><div class="card-brand">OPEN FINANCE</div><h2 class="card-title">${esc(account.name)}</h2><p class="card-note">${esc(accountSubtypeLabel(account.subtype))} · ${esc(account.institution_name || 'MeuPluggy')}</p></div><span class="chip confirmed">Automática</span></div><div class="account-balance ${num(account.balance) >= 0 ? 'positive' : 'negative'}">${money.format(num(account.balance))}</div><div class="card-note">Saldo informado pela instituição</div></article>`).join('');
+
+  const openCreditCards = pluggyAccounts.filter(account => String(account.type).toUpperCase() === 'CREDIT').map(account => {
+    const balance = Math.max(0, num(account.balance));
+    const available = account.available_credit_limit == null ? null : num(account.available_credit_limit);
+    const totalLimit = available == null ? null : Math.max(0, available + balance);
+    const percent = totalLimit ? (balance / totalLimit) * 100 : 0;
+    const closeDate = simpleDate(account.balance_close_date);
+    const dueDate = simpleDate(account.balance_due_date);
+    return `<article class="card credit-card open-finance-account"><div class="card-header"><div><div class="card-brand">OPEN FINANCE · CRÉDITO</div><h2 class="card-title">${esc(account.name)}</h2><p class="card-note">${esc(account.institution_name || 'MeuPluggy')}</p></div><span class="chip confirmed">Automático</span></div><div class="card-limit">${money.format(balance)}</div><div class="card-note">Saldo/fatura em aberto</div>${available != null ? `<div class="progress-row" style="margin-top:16px"><div class="progress-meta"><span>Limite disponível</span><strong>${money.format(available)}</strong></div>${totalLimit ? `<div class="progress ${percent >= 100 ? 'danger' : percent >= 80 ? 'warning' : ''}"><span style="width:${clamp(percent, 0, 100)}%"></span></div><div class="card-note">Limite estimado: ${money.format(totalLimit)}</div>` : ''}</div>` : ''}${closeDate || dueDate ? `<div class="card-note" style="margin-top:10px">${closeDate ? `Fecha ${shortDate.format(parseDate(closeDate))}` : ''}${closeDate && dueDate ? ' · ' : ''}${dueDate ? `Vence ${shortDate.format(parseDate(dueDate))}` : ''}</div>` : ''}</article>`;
+  }).join('');
+
+  const financeSummary = pluggyDataLoading
+    ? `<div class="open-finance-empty"><span class="spinner-dot"></span> Atualizando dados financeiros…</div>`
+    : pluggyAccounts.length
+      ? `<div class="open-finance-summary"><span><strong>${pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'BANK').length}</strong> contas</span><span><strong>${pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'CREDIT').length}</strong> cartões</span><span><strong>${pluggyTransactions.length}</strong> movimentações armazenadas</span></div>`
+      : '';
 
   const content = `
     <section class="card open-finance-card">
-      <div class="card-header open-finance-header"><div><div class="open-finance-kicker">OPEN FINANCE · PLUGGY</div><h2 class="card-title">Bancos conectados</h2><p class="card-note">Conecte sua instituição com consentimento pelo fluxo oficial do Open Finance.</p></div><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button></div>
+      <div class="card-header open-finance-header"><div><div class="open-finance-kicker">OPEN FINANCE · PLUGGY</div><h2 class="card-title">Bancos conectados</h2><p class="card-note">Saldos e movimentações vêm da Pluggy e ficam armazenados com segurança no Supabase.</p></div><div class="open-finance-actions"><button class="button" data-action="refresh-open-finance">↻ Atualizar dados</button><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button></div></div>
       ${renderPluggyConnections()}
+      ${financeSummary}
     </section>
+
     <section style="margin-top:26px">
-      <div class="card-header"><div><h2 class="card-title">Contas manuais</h2><p class="card-note">Saldos atualizados pelas movimentações confirmadas.</p></div><button class="button primary" data-action="add-account">+ Conta</button></div>
-      <div class="grid three">${accountCards || empty('Cadastre sua primeira conta.')}</div>
+      <div class="card-header"><div><h2 class="card-title">Contas Open Finance</h2><p class="card-note">Saldos atuais informados pelas instituições conectadas.</p></div></div>
+      <div class="grid three">${openBankCards || empty(pluggyDataLoading ? 'Carregando contas…' : 'Nenhuma conta bancária importada.')}</div>
     </section>
+
     <section style="margin-top:26px">
-      <div class="card-header"><div><h2 class="card-title">Cartões de crédito</h2><p class="card-note">Compras no cartão não reduzem diretamente o saldo bancário.</p></div><button class="button primary" data-action="add-card">+ Cartão</button></div>
-      <div class="grid three">${cardCards || empty('Cadastre seu primeiro cartão.')}</div>
+      <div class="card-header"><div><h2 class="card-title">Cartões Open Finance</h2><p class="card-note">Saldo em aberto e limite disponível quando fornecido pelo banco.</p></div></div>
+      <div class="grid three">${openCreditCards || empty(pluggyDataLoading ? 'Carregando cartões…' : 'Nenhum cartão importado.')}</div>
+    </section>
+
+    <section style="margin-top:26px">
+      <div class="card-header"><div><h2 class="card-title">Contas manuais</h2><p class="card-note">Use somente para contas que não estão conectadas ao Open Finance.</p></div><button class="button primary" data-action="add-account">+ Conta</button></div>
+      <div class="grid three">${manualAccountCards || empty('Nenhuma conta manual cadastrada.')}</div>
+    </section>
+
+    <section style="margin-top:26px">
+      <div class="card-header"><div><h2 class="card-title">Cartões manuais</h2><p class="card-note">Use somente para cartões que não estão conectados ao Open Finance.</p></div><button class="button primary" data-action="add-card">+ Cartão</button></div>
+      <div class="grid three">${manualCardCards || empty('Nenhum cartão manual cadastrado.')}</div>
     </section>`;
 
   return pageShell(content);
@@ -776,9 +942,10 @@ function renderReports() {
   const months = Array.from({ length: 6 }, (_, i) => shiftMonth(ui.month, i - 5));
   const results = months.map(key => ({ key, ...monthTotals(key) }));
   const maxFlow = Math.max(1, ...results.flatMap(item => [item.income, item.expense]));
-  const ignored = state.transactions.filter(tx => tx.status === 'ignored').length;
-  const pending = state.transactions.filter(tx => tx.status === 'pending').length;
-  const uncategorized = state.transactions.filter(tx => !tx.category).length;
+  const reportTransactions = allTransactions();
+  const ignored = reportTransactions.filter(tx => tx.status === 'ignored').length;
+  const pending = reportTransactions.filter(tx => tx.status === 'pending').length;
+  const uncategorized = reportTransactions.filter(tx => !tx.category || tx.category === 'Sem categoria').length;
 
   const content = `
     <section class="grid two">
@@ -792,7 +959,7 @@ function renderReports() {
           <div class="list-row"><span>Transações pendentes</span><strong class="${pending ? 'warning' : 'positive'}">${pending}</strong></div>
           <div class="list-row"><span>Transações ignoradas</span><strong>${ignored}</strong></div>
           <div class="list-row"><span>Sem categoria</span><strong class="${uncategorized ? 'warning' : 'positive'}">${uncategorized}</strong></div>
-          <div class="list-row"><span>Registros totais</span><strong>${state.transactions.length}</strong></div>
+          <div class="list-row"><span>Registros totais</span><strong>${reportTransactions.length}</strong></div>
         </div>
       </article>
     </section>
@@ -834,13 +1001,13 @@ function renderSettings() {
 
     <article class="card" style="margin-top:16px">
       <div class="card-header"><div><h2 class="card-title">Backup e exportação</h2><p class="card-note">A nuvem sincroniza automaticamente, mas você ainda pode gerar uma cópia independente.</p></div></div>
-      <div class="toolbar settings-actions"><button class="button primary" data-action="backup-json">Baixar cópia JSON</button><button class="button" data-action="restore-json">Restaurar cópia</button><button class="button" data-action="export-csv">Exportar CSV</button><button class="button danger" data-action="reset-data">Apagar todos os dados</button></div>
+      <div class="toolbar settings-actions"><button class="button primary" data-action="backup-json">Baixar cópia JSON</button><button class="button" data-action="restore-json">Restaurar cópia</button><button class="button" data-action="export-csv">Exportar CSV</button><button class="button danger" data-action="reset-data">Apagar dados manuais</button></div>
     </article>
 
     <article class="card" style="margin-top:16px">
-      <div class="card-header"><div><h2 class="card-title">Privacidade e funcionamento</h2><p class="card-note">Entradas manuais, autenticação e sincronização entre dispositivos.</p></div></div>
+      <div class="card-header"><div><h2 class="card-title">Privacidade e funcionamento</h2><p class="card-note">Dados manuais e Open Finance protegidos pelo login e pelas regras RLS.</p></div></div>
       <div class="stack">
-        <div class="list-row"><div><div class="row-title">Lançamentos</div><div class="row-subtitle">Ganhos, gastos, transferências e compras são cadastrados manualmente.</div></div><span class="chip confirmed">Manual</span></div>
+        <div class="list-row"><div><div class="row-title">Lançamentos</div><div class="row-subtitle">Movimentações podem ser manuais ou importadas pela Pluggy/Open Finance.</div></div><span class="chip confirmed">Manual + Open Finance</span></div>
         <div class="list-row"><div><div class="row-title">Segurança</div><div class="row-subtitle">O acesso aos dados depende do login e das regras RLS configuradas no Supabase.</div></div><span class="chip confirmed">RLS</span></div>
         <div class="list-row"><div><div class="row-title">Modo offline</div><div class="row-subtitle">Alterações ficam salvas neste dispositivo e são enviadas quando a internet voltar.</div></div><span class="chip pending">Local + nuvem</span></div>
         <div class="list-row"><div><div class="row-title">Versão</div><div class="row-subtitle">Aplicativo Web Progressivo (PWA) compatível com iPhone e Windows 11.</div></div><strong>${RELEASE_VERSION}</strong></div>
@@ -938,6 +1105,64 @@ async function loadPluggyItems({ quiet = false } = {}) {
   }
 }
 
+async function loadOpenFinanceData({ quiet = false } = {}) {
+  if (!authSession?.user?.id || !supabaseClient) return;
+  pluggyDataLoading = true;
+  if (ui.page === 'patrimony') render();
+  try {
+    const userId = authSession.user.id;
+    const { data: accounts, error: accountsError } = await supabaseClient
+      .from(PLUGGY_ACCOUNTS_TABLE)
+      .select('pluggy_account_id,pluggy_item_id,institution_name,name,type,subtype,balance,currency_code,available_credit_limit,balance_close_date,balance_due_date,synced_at')
+      .eq('user_id', userId)
+      .order('name', { ascending: true });
+    if (accountsError) throw accountsError;
+
+    const transactions = [];
+    const pageSize = 1000;
+    for (let from = 0; from < 10000; from += pageSize) {
+      const { data: page, error: pageError } = await supabaseClient
+        .from(PLUGGY_TRANSACTIONS_TABLE)
+        .select('pluggy_transaction_id,pluggy_account_id,transaction_date,description,description_raw,amount,transaction_type,status,category,provider_id,operation_type,installment_number,total_installments,total_amount,bill_id,bill_forecast_date,synced_at')
+        .eq('user_id', userId)
+        .order('transaction_date', { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (pageError) throw pageError;
+      transactions.push(...(page || []));
+      if (!page || page.length < pageSize) break;
+    }
+
+    pluggyAccounts = Array.isArray(accounts) ? accounts : [];
+    pluggyTransactions = transactions;
+    rebuildOpenFinanceIndexes();
+  } catch (error) {
+    console.error('Falha ao carregar dados Open Finance:', error?.message || error);
+    if (!quiet) showToast('Não foi possível carregar os dados do Open Finance.', { tone: 'error' });
+  } finally {
+    pluggyDataLoading = false;
+    render();
+  }
+}
+
+async function refreshOpenFinance({ quiet = false } = {}) {
+  if (!authSession?.user?.id) return showToast('Entre na sua conta antes de atualizar o Open Finance.', { tone: 'warning' });
+  if (!navigator.onLine) return showToast('É necessário estar conectado à internet para atualizar o Open Finance.', { tone: 'warning' });
+
+  const toast = quiet ? null : showToast('Atualizando contas e movimentações do Open Finance…', { tone: 'info', duration: 0 });
+  try {
+    const { data, error } = await supabaseClient.functions.invoke('pluggy-import-data', { body: { days: 365 } });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    await Promise.all([loadOpenFinanceData({ quiet: true }), loadPluggyItems({ quiet: true })]);
+    const accounts = data?.accountsImported ?? pluggyAccounts.length;
+    const transactions = data?.transactionsImported ?? pluggyTransactions.length;
+    if (!quiet) finishToast(toast, `Open Finance atualizado: ${accounts} contas/cartões e ${Number(transactions).toLocaleString('pt-BR')} movimentações verificadas.`, 'success', 4200);
+  } catch (error) {
+    console.error('Falha ao atualizar Open Finance:', error?.message || error);
+    if (!quiet) finishToast(toast, 'Não foi possível atualizar o Open Finance agora.', 'error', 4200);
+  }
+}
+
 async function savePluggyItem(item, connectorName = '') {
   const itemId = item?.id;
   if (!itemId || !authSession?.user?.id) throw new Error('A Pluggy não retornou o identificador da conexão.');
@@ -984,7 +1209,8 @@ async function connectBankWithPluggy() {
         try {
           await savePluggyItem(item, selectedConnectorName);
           await loadPluggyItems({ quiet: true });
-          finishToast(doneToast, 'Banco conectado com sucesso.', 'success', 3200);
+          await refreshOpenFinance({ quiet: true });
+          finishToast(doneToast, 'Banco conectado e dados financeiros atualizados.', 'success', 3600);
         } catch (saveError) {
           console.error('Falha ao salvar item Pluggy:', saveError?.message || saveError);
           finishToast(doneToast, 'O banco conectou, mas não foi possível salvar a referência no Supabase.', 'error', 5000);
@@ -1179,18 +1405,21 @@ function confirmDelete(message, callback) {
 }
 
 function exportCsv() {
-  const headers = ['Descrição','Valor','Tipo','Data','Vencimento','Pagamento','Situação','Conta','Conta destino','Cartão','Categoria','Subcategoria','Membro','Tags','Forma de pagamento','Parcela','Observações'];
+  const headers = ['Descrição','Valor','Tipo','Data','Vencimento','Pagamento','Situação','Origem','Conta/Cartão','Categoria','Subcategoria','Membro','Tags','Forma de pagamento','Parcela','Observações'];
   const quote = value => `"${String(value ?? '').replaceAll('"','""')}"`;
   const lines = [headers.map(quote).join(';')];
-  state.transactions.sort((a,b) => (a.date || '').localeCompare(b.date || '')).forEach(tx => {
+  [...allTransactions()].sort((a,b) => (a.date || '').localeCompare(b.date || '')).forEach(tx => {
+    const source = tx.origin === 'openfinance'
+      ? (tx.sourceLabel || 'Open Finance')
+      : (tx.type === 'card' ? nameById(state.cards, tx.cardId, '') : nameById(state.accounts, tx.accountId, ''));
     lines.push([
       tx.description, Number(tx.amount).toFixed(2).replace('.',','), typeLabel(tx.type), tx.date, tx.dueDate, tx.paidDate, tx.status,
-      nameById(state.accounts, tx.accountId, ''), nameById(state.accounts, tx.destinationAccountId, ''), nameById(state.cards, tx.cardId, ''),
+      tx.origin === 'openfinance' ? 'Open Finance' : 'Manual', source,
       tx.category, tx.subcategory, tx.member, (tx.tags || []).join(', '), tx.paymentMethod, `${tx.installmentCurrent || 1}/${tx.installmentTotal || 1}`, tx.notes
     ].map(quote).join(';'));
   });
   downloadBlob(`meu-financeiro-transacoes-${isoDate()}.csv`, '\ufeff' + lines.join('\n'), 'text/csv;charset=utf-8');
-  showToast('Arquivo CSV gerado.');
+  showToast('Arquivo CSV gerado com dados manuais e Open Finance.');
 }
 
 function backupJson() {
@@ -1295,7 +1524,7 @@ async function activateSession(session) {
   ui.authMessage = '';
   render();
   await initialCloudSync();
-  await loadPluggyItems({ quiet: true });
+  await Promise.all([loadPluggyItems({ quiet: true }), loadOpenFinanceData({ quiet: true })]);
   startSyncPolling();
 }
 
@@ -1307,6 +1536,9 @@ async function logoutCurrentDevice() {
   authSession = null;
   state = defaultState();
   pluggyItems = [];
+  pluggyAccounts = [];
+  pluggyTransactions = [];
+  rebuildOpenFinanceIndexes();
   syncMeta = { status: 'local', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
   ui.page = 'dashboard';
   render();
@@ -1326,7 +1558,7 @@ function stopSyncPolling() {
 
 document.addEventListener('click', event => {
   const pageButton = event.target.closest('[data-page]');
-  if (pageButton) { ui.page = pageButton.dataset.page; render(); if (ui.page === 'patrimony') loadPluggyItems({ quiet: true }); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  if (pageButton) { ui.page = pageButton.dataset.page; render(); if (ui.page === 'patrimony') Promise.all([loadPluggyItems({ quiet: true }), loadOpenFinanceData({ quiet: true })]); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const action = button.dataset.action;
@@ -1334,6 +1566,7 @@ document.addEventListener('click', event => {
   if (action === 'auth-mode') { ui.authMode = button.dataset.mode || 'signin'; ui.authMessage = ''; render(); return; }
   if (action === 'sync-now') { manualSync(); return; }
   if (action === 'connect-bank') { connectBankWithPluggy(); return; }
+  if (action === 'refresh-open-finance') { refreshOpenFinance(); return; }
   if (action === 'force-cloud') { pushStateToCloud({ force: true }).then(() => render()); return; }
   if (action === 'force-pull') {
     if (syncMeta.pending && !window.confirm('Usar a versão da nuvem? Alterações ainda não sincronizadas deste dispositivo serão substituídas.')) return;
@@ -1380,8 +1613,8 @@ document.addEventListener('click', event => {
   if (action === 'backup-json') backupJson();
   if (action === 'restore-json') document.getElementById('restore-file').click();
   if (action === 'reset-data') {
-    if (window.confirm('Apagar todos os dados financeiros desta conta? A exclusão será sincronizada com os outros dispositivos e não pode ser desfeita sem uma cópia de segurança.')) {
-      state = defaultState(); persist(); ui.month = monthKey(new Date()); render(); showToast('Todos os dados foram apagados.');
+    if (window.confirm('Apagar todos os dados manuais desta conta? Os dados importados pelo Open Finance permanecerão no Supabase e poderão ser atualizados novamente.')) {
+      state = defaultState(); persist(); ui.month = monthKey(new Date()); render(); showToast('Dados manuais apagados.');
     }
   }
 });
@@ -1458,6 +1691,9 @@ async function initializeApp() {
           authReady = true;
           state = defaultState();
           pluggyItems = [];
+          pluggyAccounts = [];
+          pluggyTransactions = [];
+          rebuildOpenFinanceIndexes();
           render();
           return;
         }

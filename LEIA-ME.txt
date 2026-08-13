@@ -1,37 +1,30 @@
-MEU FINANCEIRO v1.3.0 — PRIMEIRA INTEGRAÇÃO OPEN FINANCE / PLUGGY
+MEU FINANCEIRO v1.4.0 — OPEN FINANCE INTEGRADO À INTERFACE
 
-ALTERAÇÕES
-- Nova área Open Finance na tela Contas e cartões.
-- Botão Conectar banco.
-- O aplicativo solicita um Connect Token à Edge Function pluggy-connect-token.
-- Abre o Pluggy Connect oficial em português.
-- Exibe apenas conectores do Brasil e bancos pessoais.
-- Ao concluir a conexão, salva o itemId na tabela public.pluggy_items do Supabase.
-- A lista de bancos conectados é carregada por usuário e protegida pelas políticas RLS.
-- Esta versão ainda NÃO importa saldos e transações automaticamente. Isso será a próxima etapa.
+O que mudou:
+- Contas e cartões importados pela Pluggy aparecem automaticamente em "Contas e cartões".
+- O Dashboard passa a considerar dados Open Finance junto com os lançamentos manuais.
+- Movimentações Open Finance aparecem na tela Movimentações como somente leitura.
+- POSTED = Confirmada; PENDING = Pendente.
+- Conta bancária: DEBIT = gasto; CREDIT = ganho.
+- Cartão: valor positivo = compra; valor negativo = pagamento/crédito.
+- Pagamentos de cartão identificados entre conta bancária e cartão são tratados como neutros para evitar gasto em duplicidade.
+- Botão "Atualizar dados" chama a Edge Function pluggy-import-data e atualiza saldos/movimentações.
+- CSV inclui dados manuais + Open Finance e uma coluna Origem.
+- O botão de exclusão geral foi renomeado para "Apagar dados manuais"; dados Open Finance permanecem no Supabase.
 
-ANTES DE USAR
-No SQL Editor do Supabase execute uma vez:
+Pré-requisitos já configurados no Supabase:
+- pluggy_items
+- pluggy_accounts
+- pluggy_transactions
+- Edge Functions pluggy-connect-token e pluggy-import-data
+- RLS e permissões para authenticated
 
-grant usage, select on sequence public.pluggy_items_id_seq to authenticated;
+Atualização pelo GitHub:
+1. Substitua app.js, index.html, styles.css, sw.js e LEIA-ME.txt.
+2. Faça Commit changes na branch main.
+3. Aguarde o GitHub Pages publicar.
+4. No PC, use Ctrl+F5. No iPhone, feche completamente o PWA e abra novamente.
+5. Em Contas e cartões, toque em "Atualizar dados" para confirmar a integração.
 
-Isso permite que o ID automático da tabela pluggy_items seja gerado nas inserções feitas pelo usuário autenticado.
-
-COMO ATUALIZAR NO GITHUB
-1. Abra o repositório Meu-Financeiro.
-2. Use Add file > Upload files.
-3. Envie os arquivos desta pasta para a raiz.
-4. Faça Commit changes na branch main.
-5. Aguarde o GitHub Pages publicar.
-6. No iPhone, feche completamente o app e abra de novo.
-
-TESTE
-1. Entre em Contas e cartões.
-2. Toque em Conectar banco.
-3. Escolha uma instituição e conclua o consentimento.
-4. Ao final, a instituição deverá aparecer em Bancos conectados.
-
-SEGURANÇA
-- CLIENT_ID e CLIENT_SECRET da Pluggy continuam somente nos Secrets das Edge Functions.
-- O navegador recebe apenas Connect Token temporário.
-- O itemId fica associado ao usuário autenticado no Supabase.
+Observação:
+A categorização automática da Pluggy pode depender do plano. Transações sem categoria aparecem como "Sem categoria".
