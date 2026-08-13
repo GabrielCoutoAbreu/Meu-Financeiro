@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 4;
-const RELEASE_VERSION = '1.6.0';
+const RELEASE_VERSION = '1.6.1';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
@@ -44,6 +44,7 @@ let pluggyDataLoading = false;
 let pluggyAccountMap = new Map();
 let pluggyNeutralBankIds = new Set();
 let pluggySuppressedIds = new Set();
+let pluggyInternalTransferIds = new Set();
 let syncTimer = null;
 let syncPollTimer = null;
 let syncMeta = { status: 'local', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
@@ -559,23 +560,100 @@ function simpleDate(value) {
   return match ? match[0] : '';
 }
 
+function normalizeSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function pluggyTransferEvidence(row) {
+  const operation = String(row.operation_type || '').toUpperCase();
+  const category = normalizeSearchText(row.category);
+  const description = normalizeSearchText(`${row.description || ''} ${row.description_raw || ''}`);
+  const transferOperations = new Set(['PIX', 'TED', 'DOC', 'TRANSFERENCIA_MESMA_INSTITUICAO', 'PORTABILIDADE_SALARIO']);
+  return transferOperations.has(operation)
+    || category.includes('same person transfer')
+    || category.includes('transfer - pix')
+    || category.includes('transfer - ted')
+    || category.includes('transfer - doc')
+    || category.includes('transfer - internal')
+    || /(^|\b)(pix|ted|doc|tef|transferencia|transf)(\b|$)/i.test(description);
+}
+
+function pluggyExplicitOwnTransfer(row) {
+  const operation = String(row.operation_type || '').toUpperCase();
+  const category = normalizeSearchText(row.category);
+  const description = normalizeSearchText(`${row.description || ''} ${row.description_raw || ''}`);
+  if (category.includes('same person transfer')) return true;
+  if (operation === 'PORTABILIDADE_SALARIO') return true;
+  return /(mesma titularidade|mesmo titular|mesma pessoa|conta propria|entre minhas contas|entre contas proprias)/i.test(description);
+}
+
 function rebuildOpenFinanceIndexes() {
   pluggyAccountMap = new Map(pluggyAccounts.map(account => [account.pluggy_account_id, account]));
   pluggyNeutralBankIds = new Set();
   pluggySuppressedIds = new Set();
+  pluggyInternalTransferIds = new Set();
 
+  const bankRows = pluggyTransactions.filter(row => {
+    const account = pluggyAccountMap.get(row.pluggy_account_id);
+    return String(account?.type || '').toUpperCase() === 'BANK';
+  });
+
+  // Classificações explícitas de transferência entre contas do mesmo titular.
+  bankRows.forEach(row => {
+    if (pluggyExplicitOwnTransfer(row)) pluggyInternalTransferIds.add(row.pluggy_transaction_id);
+  });
+
+  // Pareia saída e entrada de mesmo valor entre duas contas bancárias conectadas.
+  // Exige evidência de transferência (PIX/TED/DOC/transferência) em pelo menos uma das pontas.
+  const credits = bankRows.filter(row => String(row.transaction_type || '').toUpperCase() === 'CREDIT');
+  const usedCredits = new Set();
+  bankRows
+    .filter(row => String(row.transaction_type || '').toUpperCase() === 'DEBIT')
+    .forEach(debit => {
+      const amount = Math.abs(num(debit.amount));
+      const debitTime = new Date(debit.transaction_date).getTime();
+      if (!amount || !Number.isFinite(debitTime)) return;
+
+      const candidates = credits
+        .filter(credit => {
+          if (usedCredits.has(credit.pluggy_transaction_id)) return false;
+          if (credit.pluggy_account_id === debit.pluggy_account_id) return false;
+          if (Math.abs(Math.abs(num(credit.amount)) - amount) >= 0.01) return false;
+          const creditTime = new Date(credit.transaction_date).getTime();
+          if (!Number.isFinite(creditTime) || Math.abs(creditTime - debitTime) > 2 * 86400000) return false;
+          return pluggyTransferEvidence(debit) || pluggyTransferEvidence(credit);
+        })
+        .sort((a, b) => {
+          const at = Math.abs(new Date(a.transaction_date).getTime() - debitTime);
+          const bt = Math.abs(new Date(b.transaction_date).getTime() - debitTime);
+          const aStrong = pluggyTransferEvidence(debit) && pluggyTransferEvidence(a) ? -1 : 0;
+          const bStrong = pluggyTransferEvidence(debit) && pluggyTransferEvidence(b) ? -1 : 0;
+          return aStrong - bStrong || at - bt;
+        });
+
+      const matched = candidates[0];
+      if (!matched) return;
+      pluggyInternalTransferIds.add(debit.pluggy_transaction_id);
+      pluggyInternalTransferIds.add(matched.pluggy_transaction_id);
+      usedCredits.add(matched.pluggy_transaction_id);
+    });
+
+  // Pagamentos de cartão continuam patrimonialmente neutros.
   const cardCredits = pluggyTransactions.filter(row => {
     const account = pluggyAccountMap.get(row.pluggy_account_id);
-    return account?.type === 'CREDIT' && num(row.amount) < 0;
+    return String(account?.type || '').toUpperCase() === 'CREDIT' && num(row.amount) < 0;
   });
   const usedCardCredits = new Set();
 
-  pluggyTransactions.forEach(row => {
-    const account = pluggyAccountMap.get(row.pluggy_account_id);
-    if (account?.type !== 'BANK' || String(row.transaction_type || '').toUpperCase() !== 'DEBIT') return;
+  bankRows.forEach(row => {
+    if (String(row.transaction_type || '').toUpperCase() !== 'DEBIT') return;
+    if (pluggyInternalTransferIds.has(row.pluggy_transaction_id)) return;
 
-    const description = `${row.description || ''} ${row.description_raw || ''}`.toLowerCase();
-    const explicitCardPayment = /(pagamento|pagto|pgto|pgt).*?(cart[aã]o|fatura)|(cart[aã]o|fatura).*?(pagamento|pagto|pgto|pgt)/i.test(description);
+    const description = normalizeSearchText(`${row.description || ''} ${row.description_raw || ''}`);
+    const explicitCardPayment = /(pagamento|pagto|pgto|pgt).*?(cartao|fatura)|(cartao|fatura).*?(pagamento|pagto|pgto|pgt)/i.test(description);
     const amount = Math.abs(num(row.amount));
     const time = new Date(row.transaction_date).getTime();
 
@@ -584,7 +662,11 @@ function rebuildOpenFinanceIndexes() {
       matched = cardCredits.find(other => {
         if (usedCardCredits.has(other.pluggy_transaction_id)) return false;
         const otherTime = new Date(other.transaction_date).getTime();
-        return Math.abs(Math.abs(num(other.amount)) - amount) < 0.01 && Math.abs(otherTime - time) <= 3 * 86400000;
+        const otherDescription = normalizeSearchText(`${other.description || ''} ${other.description_raw || ''}`);
+        const creditLooksLikePayment = /(pagamento|pagto|pgto|pgt|fatura)/i.test(otherDescription);
+        return Math.abs(Math.abs(num(other.amount)) - amount) < 0.01
+          && Math.abs(otherTime - time) <= 3 * 86400000
+          && (explicitCardPayment || creditLooksLikePayment);
       });
     }
 
@@ -608,6 +690,8 @@ function normalizePluggyTransaction(row) {
 
   if (accountType === 'CREDIT') {
     type = signedAmount > 0 ? 'card' : 'card_payment';
+  } else if (pluggyInternalTransferIds.has(row.pluggy_transaction_id)) {
+    type = 'transfer';
   } else if (pluggyNeutralBankIds.has(row.pluggy_transaction_id)) {
     type = 'card_payment';
   } else {
@@ -617,7 +701,7 @@ function normalizePluggyTransaction(row) {
   const date = pluggyDateLocal(row.transaction_date);
   const dueDate = simpleDate(row.bill_forecast_date) || date;
   const status = String(row.status || '').toUpperCase() === 'POSTED' ? 'confirmed' : 'pending';
-  const defaultCategory = type === 'card_payment' ? 'Transferência' : 'Sem categoria';
+  const defaultCategory = type === 'transfer' ? 'Transferência interna' : (type === 'card_payment' ? 'Transferência' : 'Sem categoria');
 
   return {
     id: `pluggy:${row.pluggy_transaction_id}`,
@@ -642,7 +726,8 @@ function normalizePluggyTransaction(row) {
     notes: '',
     origin: 'openfinance',
     sourceLabel: account.name || account.institution_name || 'Open Finance',
-    readOnly: true
+    readOnly: true,
+    internalTransfer: type === 'transfer'
   };
 }
 
@@ -1126,6 +1211,7 @@ function renderReports() {
   }).length;
   const pending = reportTransactions.filter(tx => tx.status === 'pending').length;
   const uncategorized = reportTransactions.filter(tx => !tx.category || tx.category === 'Sem categoria').length;
+  const internalTransfers = reportTransactions.filter(tx => tx.type === 'transfer' || tx.type === 'card_payment').length;
 
   const presets = [
     ['1m', '1 mês'],
@@ -1144,7 +1230,7 @@ function renderReports() {
 
   const content = `
     <article class="card report-period-card">
-      <div class="card-header"><div><h2 class="card-title">Período do relatório</h2><p class="card-note">Escolha um intervalo maior ou defina datas específicas.</p></div><span class="chip confirmed report-period-label">${esc(periodLabel)}</span></div>
+      <div class="card-header"><div><h2 class="card-title">Período do relatório</h2><p class="card-note">Escolha um intervalo maior ou defina datas específicas. Transferências entre suas próprias contas e pagamentos de cartão ficam fora das entradas e saídas.</p></div><span class="chip confirmed report-period-label">${esc(periodLabel)}</span></div>
       <div class="report-period-presets">${presets.map(([value, label]) => `<button class="button small report-period-button ${ui.reportRange === value ? 'primary active' : ''}" data-action="report-period" data-period="${value}">${label}</button>`).join('')}</div>
       ${customRange}
     </article>
@@ -1167,6 +1253,7 @@ function renderReports() {
           <div class="list-row"><span>Transações pendentes</span><strong class="${pending ? 'warning' : 'positive'}">${pending}</strong></div>
           <div class="list-row"><span>Transações ignoradas</span><strong>${ignored}</strong></div>
           <div class="list-row"><span>Sem categoria</span><strong class="${uncategorized ? 'warning' : 'positive'}">${uncategorized}</strong></div>
+          <div class="list-row"><span>Transferências internas fora do fluxo</span><strong>${internalTransfers}</strong></div>
           <div class="list-row"><span>Registros no período</span><strong>${reportTransactions.length}</strong></div>
         </div>
       </article>

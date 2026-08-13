@@ -1,3 +1,13 @@
+MEU FINANCEIRO v1.6.1 — TRANSFERÊNCIAS INTERNAS NEUTRAS
+
+Melhorias desta versão:
+- Transferências entre contas bancárias próprias conectadas pelo Open Finance são reconhecidas automaticamente.
+- PIX, TED, DOC e transferências internas pareadas por valor/data deixam de contar como entrada ou saída.
+- Transferências classificadas como mesma titularidade também são tratadas como movimentação patrimonial interna.
+- Pagamentos de cartão continuam neutros e não duplicam os gastos já registrados no cartão.
+- As movimentações continuam visíveis no histórico e no CSV; apenas deixam de distorcer entradas, saídas, resultado, categorias e gráficos.
+- A tela Relatórios informa quantos registros patrimoniais internos foram desconsiderados do fluxo.
+
 MEU FINANCEIRO v1.6.0 — RELATÓRIOS POR PERÍODO
 
 Atualização da tela Relatórios:
