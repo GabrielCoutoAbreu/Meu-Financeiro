@@ -1,26 +1,25 @@
-MEU FINANCEIRO v1.2.0 — SINCRONIZAÇÃO SUPABASE
+MEU FINANCEIRO v1.2.1 — AJUSTES DE INTERFACE E SINCRONIZAÇÃO
 
-1. No repositório GitHub Meu-Financeiro, use Add file > Upload files.
-2. Envie TODOS os arquivos desta pasta para a raiz do repositório.
-3. Quando o GitHub perguntar, confirme a substituição dos arquivos existentes.
-4. Faça Commit changes na branch main.
-5. Aguarde o GitHub Pages publicar a atualização.
-6. No iPhone, feche completamente o Meu Financeiro e abra de novo.
-   Se a tela antiga persistir, abra o endereço no Safari e atualize uma vez.
+ALTERAÇÕES DESTA VERSÃO
+- Mês exibido no formato curto: Ago/26, Set/26, Out/26 etc.
+- Tela Configurações reorganizada para iPhone/celulares.
+- E-mail, datas, chips e botões não ultrapassam a largura da tela.
+- Botões de Configurações ocupam a largura disponível no celular.
+- Campo Nome do aplicativo passa a ocupar 100% da largura no celular.
+- Ao tocar em Sincronizar, aparece um popup mostrando o andamento e o resultado.
+- O popup diferencia sucesso, falta de internet, conflito e erro.
+- Cache atualizado para forçar o carregamento da nova versão.
 
-ARQUIVOS NOVOS:
-- config.js
-- icon-192.png
-- icon-512.png
+COMO ATUALIZAR NO GITHUB
+1. Abra o repositório Meu-Financeiro.
+2. Use Add file > Upload files.
+3. Envie os arquivos desta pasta para a raiz do repositório.
+4. Confirme a substituição dos arquivos existentes.
+5. Faça Commit changes na branch main.
+6. Aguarde o GitHub Pages publicar.
+7. No iPhone, feche completamente o app e abra novamente.
+8. Se ainda aparecer a versão anterior, abra o site no Safari e recarregue uma vez.
 
-ARQUIVOS SUBSTITUÍDOS:
-- app.js
-- index.html
-- styles.css
-- sw.js
-- manifest.webmanifest
-
-IMPORTANTE:
-- O config.js contém apenas Project URL e Publishable Key do Supabase. Esses valores são públicos por projeto e foram feitos para uso no cliente, desde que RLS esteja corretamente configurado.
-- Nunca coloque service_role ou sb_secret_... no GitHub.
-- O aplicativo mantém uma cópia local para uso offline e sincroniza automaticamente quando houver internet.
+IMPORTANTE
+- Não apague dados do Safari para atualizar o aplicativo.
+- A atualização não altera o banco Supabase nem seus dados financeiros.

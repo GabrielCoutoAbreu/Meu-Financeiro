@@ -2,12 +2,12 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 3;
-const RELEASE_VERSION = '1.2.0';
+const RELEASE_VERSION = '1.2.1';
 const REMOTE_TABLE = 'user_app_state';
 const APP_URL = 'https://gabrielcoutoabreu.github.io/Meu-Financeiro/';
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-const monthName = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric' });
+const MONTH_ABBR = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
 const NAV_ITEMS = [
   ['dashboard', '⌂', 'Visão geral'],
@@ -69,6 +69,11 @@ function monthKey(dateOrString) {
 function monthDate(key) {
   const [y, m] = key.split('-').map(Number);
   return new Date(y, m - 1, 1, 12);
+}
+
+function formatMonthShort(keyOrDate) {
+  const d = typeof keyOrDate === 'string' ? monthDate(keyOrDate) : keyOrDate;
+  return `${MONTH_ABBR[d.getMonth()]}/${String(d.getFullYear()).slice(-2)}`;
 }
 
 function shiftMonth(key, amount) {
@@ -503,7 +508,7 @@ function pageShell(content, extraAction = '') {
   const monthControl = ui.page === 'settings' ? '' : `
     <div class="month-control" aria-label="Mês selecionado">
       <button class="icon-button" data-action="prev-month" aria-label="Mês anterior">‹</button>
-      <div class="month-label">${esc(monthName.format(monthDate(ui.month)))}</div>
+      <div class="month-label">${esc(formatMonthShort(ui.month))}</div>
       <button class="icon-button" data-action="next-month" aria-label="Próximo mês">›</button>
     </div>`;
 
@@ -703,7 +708,7 @@ function renderPatrimony() {
   const cardCards = state.cards.map(card => {
     const invoice = cardInvoice(card.id);
     const available = card.limit - invoice;
-    return `<article class="card credit-card"><div class="card-header"><div><div class="card-brand">${esc(card.brand || 'Cartão')}</div><h2 class="card-title">${esc(card.name)}</h2></div><div class="row-actions"><button class="icon-button" data-action="edit-card" data-id="${card.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-card" data-id="${card.id}" aria-label="Excluir">×</button></div></div><div class="card-limit">${money.format(invoice)}</div><div class="card-note">Fatura de ${esc(monthName.format(monthDate(ui.month)))}</div><div class="progress-row" style="margin-top:16px"><div class="progress-meta"><span>Limite disponível</span><strong class="${available < 0 ? 'negative' : ''}">${money.format(available)}</strong></div><div class="progress ${invoice > card.limit ? 'danger' : invoice / card.limit >= .8 ? 'warning' : ''}"><span style="width:${clamp((invoice / card.limit) * 100, 0, 100)}%"></span></div><div class="card-note">Fecha dia ${card.closingDay} · vence dia ${card.dueDay} · paga por ${esc(nameById(state.accounts, card.linkedAccountId))}</div></div></article>`;
+    return `<article class="card credit-card"><div class="card-header"><div><div class="card-brand">${esc(card.brand || 'Cartão')}</div><h2 class="card-title">${esc(card.name)}</h2></div><div class="row-actions"><button class="icon-button" data-action="edit-card" data-id="${card.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-card" data-id="${card.id}" aria-label="Excluir">×</button></div></div><div class="card-limit">${money.format(invoice)}</div><div class="card-note">Fatura de ${esc(formatMonthShort(ui.month))}</div><div class="progress-row" style="margin-top:16px"><div class="progress-meta"><span>Limite disponível</span><strong class="${available < 0 ? 'negative' : ''}">${money.format(available)}</strong></div><div class="progress ${invoice > card.limit ? 'danger' : invoice / card.limit >= .8 ? 'warning' : ''}"><span style="width:${clamp((invoice / card.limit) * 100, 0, 100)}%"></span></div><div class="card-note">Fecha dia ${card.closingDay} · vence dia ${card.dueDay} · paga por ${esc(nameById(state.accounts, card.linkedAccountId))}</div></div></article>`;
   }).join('');
 
   const content = `
@@ -769,7 +774,7 @@ function renderReports() {
 
     <article class="card" style="margin-top:16px">
       <div class="card-header"><div><h2 class="card-title">Entradas e saídas — 6 meses</h2><p class="card-note">Comparativo baseado em transações confirmadas</p></div></div>
-      <div class="chart">${results.map(item => `<div class="chart-row"><div class="chart-label">${esc(new Intl.DateTimeFormat('pt-BR',{month:'short',year:'2-digit'}).format(monthDate(item.key)))}</div><div><div class="chart-track" title="Ganhos"><div class="chart-bar" style="width:${(item.income / maxFlow) * 100}%"></div></div><div class="chart-track" title="Gastos" style="margin-top:5px"><div class="chart-bar" style="width:${(item.expense / maxFlow) * 100}%;background:var(--negative)"></div></div></div><div class="chart-value ${item.result >= 0 ? 'positive' : 'negative'}">${money.format(item.result)}</div></div>`).join('')}</div>
+      <div class="chart">${results.map(item => `<div class="chart-row"><div class="chart-label">${esc(formatMonthShort(item.key))}</div><div><div class="chart-track" title="Ganhos"><div class="chart-bar" style="width:${(item.income / maxFlow) * 100}%"></div></div><div class="chart-track" title="Gastos" style="margin-top:5px"><div class="chart-bar" style="width:${(item.expense / maxFlow) * 100}%;background:var(--negative)"></div></div></div><div class="chart-value ${item.result >= 0 ? 'positive' : 'negative'}">${money.format(item.result)}</div></div>`).join('')}</div>
     </article>
 
     <article class="card" style="margin-top:16px">
@@ -784,27 +789,27 @@ function renderSettings() {
   const info = syncStatusInfo();
   const lastSync = syncMeta.lastSyncedAt ? shortDate.format(new Date(syncMeta.lastSyncedAt)) + ' ' + new Intl.DateTimeFormat('pt-BR',{hour:'2-digit',minute:'2-digit'}).format(new Date(syncMeta.lastSyncedAt)) : 'Ainda não sincronizado';
   const conflictActions = syncMeta.status === 'conflict' ? `<div class="sync-conflict"><strong>Conflito de sincronização</strong><p>${esc(syncMeta.message)}</p><div class="toolbar"><button class="button primary" data-action="force-cloud">Usar versão deste dispositivo</button><button class="button" data-action="force-pull">Usar versão da nuvem</button></div></div>` : '';
-  const content = `
-    <article class="card">
-      <div class="card-header"><div><h2 class="card-title">Conta e sincronização</h2><p class="card-note">O mesmo login mantém os dados iguais no iPhone, Windows e outros dispositivos.</p></div><span class="chip ${info.tone}" data-sync-label>${info.label}</span></div>
+  const content = `<div class="settings-page">
+    <article class="card settings-sync-card">
+      <div class="card-header settings-card-header"><div><h2 class="card-title">Conta e sincronização</h2><p class="card-note">O mesmo login mantém os dados iguais no iPhone, Windows e outros dispositivos.</p></div><span class="chip ${info.tone}" data-sync-label>${info.label}</span></div>
       <div class="stack">
         <div class="list-row"><div><div class="row-title">Usuário</div><div class="row-subtitle">Conta conectada ao Supabase</div></div><strong>${esc(authSession?.user?.email || '')}</strong></div>
         <div class="list-row"><div><div class="row-title">Última sincronização</div><div class="row-subtitle">${esc(syncMeta.message || 'Sincronização automática ativa.')}</div></div><strong>${esc(lastSync)}</strong></div>
         <div class="list-row"><div><div class="row-title">Armazenamento</div><div class="row-subtitle">Nuvem central com cópia local para uso offline.</div></div><span class="chip confirmed">Supabase</span></div>
       </div>
       ${conflictActions}
-      <div class="toolbar" style="margin-top:14px"><button class="button primary" data-action="sync-now">Sincronizar agora</button><button class="button" data-action="force-pull">Recarregar da nuvem</button><button class="button" data-action="logout">Sair deste dispositivo</button></div>
+      <div class="toolbar settings-actions" style="margin-top:14px"><button class="button primary" data-action="sync-now">Sincronizar agora</button><button class="button" data-action="force-pull">Recarregar da nuvem</button><button class="button" data-action="logout">Sair deste dispositivo</button></div>
     </article>
 
     <article class="card" style="margin-top:16px">
       <div class="setting-row"><div><div class="setting-title">Tema escuro</div><div class="setting-note">Adapta a interface para ambientes com pouca luz.</div></div><label class="switch"><input type="checkbox" id="dark-mode" ${state.preferences.darkMode ? 'checked' : ''}><span></span></label></div>
       <div class="setting-row"><div><div class="setting-title">Visão por caixa</div><div class="setting-note">Quando ativada, usa pagamento, recebimento ou vencimento; desativada, usa a data original da transação (competência).</div></div><label class="switch"><input type="checkbox" id="cash-basis" ${state.preferences.basis === 'cash' ? 'checked' : ''}><span></span></label></div>
-      <div class="setting-row"><div><div class="setting-title">Nome do aplicativo</div><div class="setting-note">Personalize o título exibido na barra lateral.</div></div><div style="width:min(300px,45vw)"><input class="input" id="app-name" value="${esc(state.preferences.name || '')}" maxlength="40"></div></div>
+      <div class="setting-row setting-row-name"><div><div class="setting-title">Nome do aplicativo</div><div class="setting-note">Personalize o título exibido na barra lateral.</div></div><div class="setting-name-control"><input class="input" id="app-name" value="${esc(state.preferences.name || '')}" maxlength="40"></div></div>
     </article>
 
     <article class="card" style="margin-top:16px">
       <div class="card-header"><div><h2 class="card-title">Backup e exportação</h2><p class="card-note">A nuvem sincroniza automaticamente, mas você ainda pode gerar uma cópia independente.</p></div></div>
-      <div class="toolbar"><button class="button primary" data-action="backup-json">Baixar cópia JSON</button><button class="button" data-action="restore-json">Restaurar cópia</button><button class="button" data-action="export-csv">Exportar CSV</button><button class="button danger" data-action="reset-data">Apagar todos os dados</button></div>
+      <div class="toolbar settings-actions"><button class="button primary" data-action="backup-json">Baixar cópia JSON</button><button class="button" data-action="restore-json">Restaurar cópia</button><button class="button" data-action="export-csv">Exportar CSV</button><button class="button danger" data-action="reset-data">Apagar todos os dados</button></div>
     </article>
 
     <article class="card" style="margin-top:16px">
@@ -815,7 +820,8 @@ function renderSettings() {
         <div class="list-row"><div><div class="row-title">Modo offline</div><div class="row-subtitle">Alterações ficam salvas neste dispositivo e são enviadas quando a internet voltar.</div></div><span class="chip pending">Local + nuvem</span></div>
         <div class="list-row"><div><div class="row-title">Versão</div><div class="row-subtitle">Aplicativo Web Progressivo (PWA) compatível com iPhone e Windows 11.</div></div><strong>${RELEASE_VERSION}</strong></div>
       </div>
-    </article>`;
+    </article>
+  </div>`;
   return pageShell(content);
 }
 
@@ -836,13 +842,55 @@ function closeModal() {
   document.getElementById('modal-root').innerHTML = '';
 }
 
-function showToast(message) {
+function showToast(message, options = {}) {
+  const { tone = 'default', duration = 3000 } = options;
   const root = document.getElementById('toast-root');
   const node = document.createElement('div');
-  node.className = 'toast';
+  node.className = `toast toast-${tone}`;
   node.textContent = message;
   root.appendChild(node);
-  setTimeout(() => node.remove(), 3000);
+  if (duration > 0) setTimeout(() => node.remove(), duration);
+  return node;
+}
+
+function finishToast(node, message, tone = 'success', duration = 2600) {
+  if (!node?.isConnected) return showToast(message, { tone, duration });
+  node.className = `toast toast-${tone}`;
+  node.textContent = message;
+  setTimeout(() => node.remove(), duration);
+  return node;
+}
+
+async function manualSync() {
+  const toast = showToast('Sincronizando com a nuvem…', { tone: 'info', duration: 0 });
+
+  if (!navigator.onLine) {
+    syncMeta.status = 'offline';
+    syncMeta.pending = true;
+    syncMeta.message = 'Sem internet. As alterações permanecem salvas neste dispositivo.';
+    saveSyncMeta();
+    updateSyncIndicator();
+    finishToast(toast, 'Sem internet — dados salvos neste dispositivo.', 'warning');
+    return;
+  }
+
+  try {
+    if (syncMeta.pending) await pushStateToCloud();
+    else await pullStateFromCloud({ force: true });
+
+    if (syncMeta.status === 'synced') {
+      finishToast(toast, syncMeta.message || 'Sincronização concluída.', 'success');
+    } else if (syncMeta.status === 'conflict') {
+      finishToast(toast, 'Conflito detectado. Abra Configurações para escolher a versão.', 'warning', 3800);
+    } else if (syncMeta.status === 'offline') {
+      finishToast(toast, 'Sem internet — sincronização pendente.', 'warning');
+    } else {
+      finishToast(toast, syncMeta.message || 'Não foi possível sincronizar agora.', 'error', 3800);
+    }
+  } catch (error) {
+    console.error('Falha na sincronização manual:', error);
+    finishToast(toast, 'Erro ao sincronizar. Tente novamente.', 'error', 3800);
+  }
 }
 
 function categoryDatalist() {
@@ -1171,7 +1219,7 @@ document.addEventListener('click', event => {
   const action = button.dataset.action;
   const id = button.dataset.id;
   if (action === 'auth-mode') { ui.authMode = button.dataset.mode || 'signin'; ui.authMessage = ''; render(); return; }
-  if (action === 'sync-now') { if (syncMeta.pending) pushStateToCloud(); else pullStateFromCloud({ force: true }); return; }
+  if (action === 'sync-now') { manualSync(); return; }
   if (action === 'force-cloud') { pushStateToCloud({ force: true }).then(() => render()); return; }
   if (action === 'force-pull') {
     if (syncMeta.pending && !window.confirm('Usar a versão da nuvem? Alterações ainda não sincronizadas deste dispositivo serão substituídas.')) return;

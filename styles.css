@@ -139,6 +139,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .switch input:checked + span { background: var(--primary); }
 .switch input:checked + span::before { transform: translateX(20px); }
 
+.settings-page { width: 100%; }
+.settings-name-control { width: min(300px, 45vw); }
+.settings-page .list-row > strong,
+.settings-page .list-row > .chip { flex: 0 0 auto; }
+
 .bottom-nav { display: none; }
 .fab { position: fixed; right: 24px; bottom: calc(24px + var(--safe-bottom)); width: 56px; height: 56px; border-radius: 18px; border: 0; background: var(--primary); color: white; font-size: 1.6rem; box-shadow: 0 16px 34px rgba(15, 118, 110, .35); z-index: 5; }
 
@@ -156,6 +161,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .toast-root { position: fixed; right: 18px; top: calc(18px + var(--safe-top)); z-index: 200; display: grid; gap: 8px; }
 .toast { background: var(--text); color: var(--surface); border-radius: 12px; padding: 11px 14px; box-shadow: var(--shadow); animation: toast-in .18s ease-out; max-width: 340px; }
+.toast-info { background: var(--primary-strong); color: white; }
+.toast-success { background: var(--positive); color: white; }
+.toast-warning { background: #8a5a00; color: white; }
+.toast-error { background: var(--negative); color: white; }
 @keyframes toast-in { from { transform: translateY(-8px); opacity: 0; } }
 
 .install-banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 14px; margin-bottom: 16px; background: var(--primary-soft); border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--border)); border-radius: 14px; }
@@ -183,6 +192,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .chart-row { grid-template-columns: 90px 1fr auto; }
   .list-row { align-items: flex-start; }
   .row-actions { flex-direction: column; }
+  .settings-page .settings-card-header { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .settings-page .list-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; width: 100%; }
+  .settings-page .list-row > strong { width: 100%; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; text-align: left; }
+  .settings-page .list-row > .chip { justify-self: start; }
+  .settings-page .settings-actions { display: grid; grid-template-columns: 1fr; gap: 9px; width: 100%; }
+  .settings-page .settings-actions .button { width: 100%; min-height: 44px; }
+  .settings-page .setting-row { align-items: flex-start; gap: 12px; }
+  .settings-page .setting-row-name { flex-direction: column; }
+  .settings-name-control { width: 100%; }
   .modal-backdrop { padding: 0; place-items: end stretch; }
   .modal { width: 100%; max-height: 94vh; border-radius: 22px 22px 0 0; }
   .install-banner { align-items: flex-start; }
@@ -194,6 +212,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .kpi-value { font-size: 1.2rem; }
   .month-label { min-width: 104px; font-size: .85rem; }
   .page-subtitle { font-size: .85rem; }
+  .toast-root { left: 14px; right: 14px; }
+  .toast { width: 100%; max-width: none; }
 }
 
 /* ===== Autenticação e sincronização — v1.2 ===== */
