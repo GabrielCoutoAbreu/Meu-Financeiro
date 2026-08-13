@@ -2,11 +2,12 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 4;
-const RELEASE_VERSION = '1.4.0';
+const RELEASE_VERSION = '1.5.0';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
 const PLUGGY_TRANSACTIONS_TABLE = 'pluggy_transactions';
+const PLUGGY_INVESTMENTS_TABLE = 'pluggy_investments';
 const APP_URL = 'https://gabrielcoutoabreu.github.io/Meu-Financeiro/';
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -24,7 +25,7 @@ const NAV_ITEMS = [
 const PAGE_META = {
   dashboard: ['Visão geral', 'Seu mês financeiro em uma única tela.'],
   transactions: ['Movimentações', 'Ganhos, gastos, transferências e compras no cartão.'],
-  patrimony: ['Contas e cartões', 'Saldos, faturas e limite disponível.'],
+  patrimony: ['Contas e cartões', 'Saldos, faturas, investimentos e limite disponível.'],
   planning: ['Planejamento', 'Orçamentos mensais e objetivos financeiros.'],
   reports: ['Relatórios', 'Análises por categoria, evolução e exportação.'],
   settings: ['Configurações', 'Preferências, segurança e cópias dos dados.']
@@ -38,6 +39,7 @@ let pluggyItems = [];
 let pluggyItemsLoading = false;
 let pluggyAccounts = [];
 let pluggyTransactions = [];
+let pluggyInvestments = [];
 let pluggyDataLoading = false;
 let pluggyAccountMap = new Map();
 let pluggyNeutralBankIds = new Set();
@@ -542,6 +544,43 @@ function openFinanceTransactions() {
   return pluggyTransactions.map(normalizePluggyTransaction).filter(Boolean);
 }
 
+function investmentTypeLabel(type) {
+  const key = String(type || '').toUpperCase();
+  return {
+    FIXED_INCOME: 'Renda fixa',
+    MUTUAL_FUND: 'Fundo de investimento',
+    EQUITY: 'Ações',
+    ETF: 'ETF',
+    SECURITY: 'Título',
+    COE: 'COE',
+    PENSION: 'Previdência',
+    CRYPTO: 'Criptoativo'
+  }[key] || String(type || '').replaceAll('_', ' ').toLowerCase().replace(/^./, c => c.toUpperCase()) || 'Investimento';
+}
+
+function investmentStatusLabel(status) {
+  const key = String(status || '').toUpperCase();
+  if (key === 'ACTIVE') return { label: 'Ativo', tone: 'confirmed' };
+  if (key === 'TOTAL_WITHDRAWAL') return { label: 'Resgatado', tone: 'ignored' };
+  if (key === 'MATURED') return { label: 'Vencido', tone: 'ignored' };
+  if (key === 'INACTIVE') return { label: 'Inativo', tone: 'ignored' };
+  return { label: key ? key.replaceAll('_', ' ') : 'Investimento', tone: 'ignored' };
+}
+
+function institutionForItem(itemId) {
+  const institutions = [...new Set(pluggyAccounts
+    .filter(account => account.pluggy_item_id === itemId)
+    .map(account => account.institution_name)
+    .filter(Boolean))];
+  if (institutions.length === 1) return institutions[0];
+  if (institutions.length > 1) return institutions.join(' / ');
+  return pluggyItems.find(item => item.item_id === itemId)?.connector_name || 'MeuPluggy';
+}
+
+function totalInvestmentBalance() {
+  return pluggyInvestments.reduce((sum, investment) => sum + num(investment.balance), 0);
+}
+
 function allTransactions() {
   return [...state.transactions, ...openFinanceTransactions()];
 }
@@ -613,7 +652,8 @@ function totalNetWorth() {
   const manualCards = state.cards.reduce((sum, card) => sum + cardInvoice(card.id), 0);
   const bankBalances = pluggyAccounts.filter(account => String(account.type).toUpperCase() === 'BANK').reduce((sum, account) => sum + num(account.balance), 0);
   const creditBalances = pluggyAccounts.filter(account => String(account.type).toUpperCase() === 'CREDIT').reduce((sum, account) => sum + Math.max(0, num(account.balance)), 0);
-  return manualAccounts + bankBalances - manualCards - creditBalances;
+  const investmentBalances = totalInvestmentBalance();
+  return manualAccounts + bankBalances + investmentBalances - manualCards - creditBalances;
 }
 
 function nameById(collection, id, fallback = '—') {
@@ -717,7 +757,7 @@ function renderDashboard() {
   const recent = monthTransactions().sort((a, b) => (transactionViewDate(b) || '').localeCompare(transactionViewDate(a) || '')).slice(0, 6);
   const pending = monthTransactions().filter(tx => tx.status === 'pending' && ['income','expense','card'].includes(tx.type)).reduce((sum, tx) => sum + num(tx.amount), 0);
   const resultChange = previous.result ? ((totals.result - previous.result) / Math.abs(previous.result)) * 100 : 0;
-  const gettingStarted = state.accounts.length === 0 && state.transactions.length === 0 && pluggyAccounts.length === 0 ? `
+  const gettingStarted = state.accounts.length === 0 && state.transactions.length === 0 && pluggyAccounts.length === 0 && pluggyInvestments.length === 0 ? `
     <article class="card getting-started" style="margin-bottom:16px">
       <div class="card-header"><div><h2 class="card-title">Comece por aqui</h2><p class="card-note">Cadastre contas manualmente ou conecte seu banco pelo Open Finance.</p></div></div>
       <div class="toolbar"><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button><button class="button" data-action="add-account">+ Conta manual</button></div>
@@ -726,7 +766,7 @@ function renderDashboard() {
   const content = `
     ${gettingStarted}
     <section class="grid kpis">
-      ${kpi('Patrimônio líquido', money.format(totalNetWorth()), `${state.accounts.length + pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'BANK').length} contas e ${state.cards.length + pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'CREDIT').length} cartões`, totalNetWorth() >= 0 ? 'positive' : 'negative')}
+      ${kpi('Patrimônio líquido', money.format(totalNetWorth()), `${state.accounts.length + pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'BANK').length} contas, ${state.cards.length + pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'CREDIT').length} cartões e ${pluggyInvestments.length} investimentos`, totalNetWorth() >= 0 ? 'positive' : 'negative')}
       ${kpi('Ganhos confirmados', money.format(totals.income), 'No período selecionado', 'positive')}
       ${kpi('Gastos confirmados', money.format(totals.expense), `${state.preferences.basis === 'cash' ? 'Visão por caixa' : 'Visão por competência'}`, 'negative')}
       ${kpi('Resultado do mês', money.format(totals.result), `${resultChange >= 0 ? '+' : ''}${resultChange.toFixed(0)}% versus mês anterior`, totals.result >= 0 ? 'positive' : 'negative')}
@@ -845,7 +885,9 @@ function renderPluggyConnections() {
   return `<div class="pluggy-list">${pluggyItems.map(item => {
     const status = pluggyStatusLabel(item.status);
     const updated = item.last_sync_at ? shortDate.format(new Date(item.last_sync_at)) : '';
-    return `<div class="pluggy-row"><div class="row-main"><div class="bank-avatar">🏦</div><div><div class="row-title">${esc(item.connector_name || 'Instituição conectada')}</div><div class="row-subtitle">Open Finance · ID ${esc(String(item.item_id || '').slice(0, 8))}${updated ? ` · ${esc(updated)}` : ''}</div></div></div><span class="chip ${status.tone}">${esc(status.label)}</span></div>`;
+    const inferredInstitution = institutionForItem(item.item_id);
+    const displayName = inferredInstitution && inferredInstitution !== 'MeuPluggy' ? inferredInstitution : (item.connector_name || 'Instituição conectada');
+    return `<div class="pluggy-row"><div class="row-main"><div class="bank-avatar">🏦</div><div><div class="row-title">${esc(displayName)}</div><div class="row-subtitle">MeuPluggy · ID ${esc(String(item.item_id || '').slice(0, 8))}${updated ? ` · ${esc(updated)}` : ''}</div></div></div><span class="chip ${status.tone}">${esc(status.label)}</span></div>`;
   }).join('')}</div>`;
 }
 
@@ -879,10 +921,32 @@ function renderPatrimony() {
     return `<article class="card credit-card open-finance-account"><div class="card-header"><div><div class="card-brand">OPEN FINANCE · CRÉDITO</div><h2 class="card-title">${esc(account.name)}</h2><p class="card-note">${esc(account.institution_name || 'MeuPluggy')}</p></div><span class="chip confirmed">Automático</span></div><div class="card-limit">${money.format(balance)}</div><div class="card-note">Saldo/fatura em aberto</div>${available != null ? `<div class="progress-row" style="margin-top:16px"><div class="progress-meta"><span>Limite disponível</span><strong>${money.format(available)}</strong></div>${totalLimit ? `<div class="progress ${percent >= 100 ? 'danger' : percent >= 80 ? 'warning' : ''}"><span style="width:${clamp(percent, 0, 100)}%"></span></div><div class="card-note">Limite estimado: ${money.format(totalLimit)}</div>` : ''}</div>` : ''}${closeDate || dueDate ? `<div class="card-note" style="margin-top:10px">${closeDate ? `Fecha ${shortDate.format(parseDate(closeDate))}` : ''}${closeDate && dueDate ? ' · ' : ''}${dueDate ? `Vence ${shortDate.format(parseDate(dueDate))}` : ''}</div>` : ''}</article>`;
   }).join('');
 
+  const openInvestmentCards = pluggyInvestments.map(investment => {
+    const balance = num(investment.balance);
+    const original = investment.amount_original == null ? null : num(investment.amount_original);
+    const withdrawal = investment.amount_withdrawal == null ? null : num(investment.amount_withdrawal);
+    const status = investmentStatusLabel(investment.status);
+    const dueDate = simpleDate(investment.due_date);
+    const type = investmentTypeLabel(investment.type);
+    const subtype = investment.subtype ? String(investment.subtype).replaceAll('_', ' ') : '';
+    const institution = institutionForItem(investment.pluggy_item_id);
+    return `<article class="card investment-card open-finance-account">
+      <div class="card-header"><div><div class="card-brand">OPEN FINANCE · ${esc(type.toUpperCase())}</div><h2 class="card-title">${esc(investment.name || subtype || 'Investimento')}</h2><p class="card-note">${esc(institution)}${subtype ? ` · ${esc(subtype)}` : ''}</p></div><span class="chip ${status.tone}">${esc(status.label)}</span></div>
+      <div class="investment-balance ${balance >= 0 ? 'positive' : 'negative'}">${money.format(balance)}</div>
+      <div class="card-note">Saldo atual informado pela instituição</div>
+      <div class="investment-details">
+        ${original != null ? `<div><span>Valor aplicado</span><strong>${money.format(original)}</strong></div>` : ''}
+        ${withdrawal != null ? `<div><span>Disponível para resgate</span><strong>${money.format(withdrawal)}</strong></div>` : ''}
+        ${investment.issuer ? `<div><span>Emissor</span><strong>${esc(investment.issuer)}</strong></div>` : ''}
+        ${dueDate ? `<div><span>Vencimento</span><strong>${shortDate.format(parseDate(dueDate))}</strong></div>` : ''}
+      </div>
+    </article>`;
+  }).join('');
+
   const financeSummary = pluggyDataLoading
     ? `<div class="open-finance-empty"><span class="spinner-dot"></span> Atualizando dados financeiros…</div>`
-    : pluggyAccounts.length
-      ? `<div class="open-finance-summary"><span><strong>${pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'BANK').length}</strong> contas</span><span><strong>${pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'CREDIT').length}</strong> cartões</span><span><strong>${pluggyTransactions.length}</strong> movimentações armazenadas</span></div>`
+    : (pluggyAccounts.length || pluggyInvestments.length)
+      ? `<div class="open-finance-summary"><span><strong>${pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'BANK').length}</strong> contas</span><span><strong>${pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'CREDIT').length}</strong> cartões</span><span><strong>${pluggyInvestments.length}</strong> investimentos · ${money.format(totalInvestmentBalance())}</span><span><strong>${pluggyTransactions.length}</strong> movimentações armazenadas</span></div>`
       : '';
 
   const content = `
@@ -900,6 +964,11 @@ function renderPatrimony() {
     <section style="margin-top:26px">
       <div class="card-header"><div><h2 class="card-title">Cartões Open Finance</h2><p class="card-note">Saldo em aberto e limite disponível quando fornecido pelo banco.</p></div></div>
       <div class="grid three">${openCreditCards || empty(pluggyDataLoading ? 'Carregando cartões…' : 'Nenhum cartão importado.')}</div>
+    </section>
+
+    <section style="margin-top:26px">
+      <div class="card-header investment-section-header"><div><h2 class="card-title">Investimentos Open Finance</h2><p class="card-note">Posição atual dos ativos informada pelas instituições conectadas.</p></div>${pluggyInvestments.length ? `<div class="investment-summary"><span>Patrimônio investido</span><strong>${money.format(totalInvestmentBalance())}</strong></div>` : ''}</div>
+      <div class="grid three">${openInvestmentCards || empty(pluggyDataLoading ? 'Carregando investimentos…' : 'Nenhum investimento importado.')}</div>
     </section>
 
     <section style="margin-top:26px">
@@ -1132,8 +1201,16 @@ async function loadOpenFinanceData({ quiet = false } = {}) {
       if (!page || page.length < pageSize) break;
     }
 
+    const { data: investments, error: investmentsError } = await supabaseClient
+      .from(PLUGGY_INVESTMENTS_TABLE)
+      .select('pluggy_investment_id,pluggy_item_id,name,type,subtype,code,provider_id,currency_code,balance,amount,amount_original,amount_withdrawal,amount_profit,taxes,taxes2,quantity,unit_value,rate,rate_type,fixed_annual_rate,last_month_rate,last_twelve_months_rate,annual_rate,reference_date,due_date,issue_date,issuer,status,synced_at')
+      .eq('user_id', userId)
+      .order('balance', { ascending: false });
+    if (investmentsError) throw investmentsError;
+
     pluggyAccounts = Array.isArray(accounts) ? accounts : [];
     pluggyTransactions = transactions;
+    pluggyInvestments = Array.isArray(investments) ? investments : [];
     rebuildOpenFinanceIndexes();
   } catch (error) {
     console.error('Falha ao carregar dados Open Finance:', error?.message || error);
@@ -1156,7 +1233,8 @@ async function refreshOpenFinance({ quiet = false } = {}) {
     await Promise.all([loadOpenFinanceData({ quiet: true }), loadPluggyItems({ quiet: true })]);
     const accounts = data?.accountsImported ?? pluggyAccounts.length;
     const transactions = data?.transactionsImported ?? pluggyTransactions.length;
-    if (!quiet) finishToast(toast, `Open Finance atualizado: ${accounts} contas/cartões e ${Number(transactions).toLocaleString('pt-BR')} movimentações verificadas.`, 'success', 4200);
+    const investments = data?.investmentsImported ?? pluggyInvestments.length;
+    if (!quiet) finishToast(toast, `Open Finance atualizado: ${accounts} contas/cartões, ${investments} investimentos e ${Number(transactions).toLocaleString('pt-BR')} movimentações verificadas.`, 'success', 4600);
   } catch (error) {
     console.error('Falha ao atualizar Open Finance:', error?.message || error);
     if (!quiet) finishToast(toast, 'Não foi possível atualizar o Open Finance agora.', 'error', 4200);
@@ -1538,6 +1616,7 @@ async function logoutCurrentDevice() {
   pluggyItems = [];
   pluggyAccounts = [];
   pluggyTransactions = [];
+  pluggyInvestments = [];
   rebuildOpenFinanceIndexes();
   syncMeta = { status: 'local', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
   ui.page = 'dashboard';
@@ -1693,6 +1772,7 @@ async function initializeApp() {
           pluggyItems = [];
           pluggyAccounts = [];
           pluggyTransactions = [];
+          pluggyInvestments = [];
           rebuildOpenFinanceIndexes();
           render();
           return;

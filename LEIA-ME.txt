@@ -1,30 +1,20 @@
-MEU FINANCEIRO v1.4.0 — OPEN FINANCE INTEGRADO À INTERFACE
+MEU FINANCEIRO v1.5.0 — INVESTIMENTOS OPEN FINANCE
 
-O que mudou:
-- Contas e cartões importados pela Pluggy aparecem automaticamente em "Contas e cartões".
-- O Dashboard passa a considerar dados Open Finance junto com os lançamentos manuais.
-- Movimentações Open Finance aparecem na tela Movimentações como somente leitura.
-- POSTED = Confirmada; PENDING = Pendente.
-- Conta bancária: DEBIT = gasto; CREDIT = ganho.
-- Cartão: valor positivo = compra; valor negativo = pagamento/crédito.
-- Pagamentos de cartão identificados entre conta bancária e cartão são tratados como neutros para evitar gasto em duplicidade.
-- Botão "Atualizar dados" chama a Edge Function pluggy-import-data e atualiza saldos/movimentações.
-- CSV inclui dados manuais + Open Finance e uma coluna Origem.
-- O botão de exclusão geral foi renomeado para "Apagar dados manuais"; dados Open Finance permanecem no Supabase.
+NOVIDADES
+- Investimentos da Pluggy/Supabase exibidos em Contas e cartões.
+- Patrimônio líquido passa a incluir o saldo atual dos investimentos.
+- Resumo Open Finance mostra quantidade e patrimônio investido.
+- Cards de investimento mostram tipo, subtipo, banco, saldo atual, valor aplicado, resgate, emissor e vencimento quando disponíveis.
+- Conexões MeuPluggy passam a usar o nome da instituição inferido pelos produtos (ex.: Santander e Bradesco).
+- Atualizar dados passa a informar também quantos investimentos foram sincronizados.
 
-Pré-requisitos já configurados no Supabase:
-- pluggy_items
-- pluggy_accounts
-- pluggy_transactions
-- Edge Functions pluggy-connect-token e pluggy-import-data
-- RLS e permissões para authenticated
+ARQUIVOS PARA ATUALIZAR NO GITHUB
+- app.js
+- index.html
+- styles.css
+- sw.js
+- LEIA-ME.txt
 
-Atualização pelo GitHub:
-1. Substitua app.js, index.html, styles.css, sw.js e LEIA-ME.txt.
-2. Faça Commit changes na branch main.
-3. Aguarde o GitHub Pages publicar.
-4. No PC, use Ctrl+F5. No iPhone, feche completamente o PWA e abra novamente.
-5. Em Contas e cartões, toque em "Atualizar dados" para confirmar a integração.
-
-Observação:
-A categorização automática da Pluggy pode depender do plano. Transações sem categoria aparecem como "Sem categoria".
+IMPORTANTE
+- Esta versão pressupõe que a tabela public.pluggy_investments já foi criada no Supabase e que a Edge Function pluggy-import-data foi atualizada para importar investimentos.
+- Não coloque PLUGGY_CLIENT_SECRET, sb_secret_ ou service_role no GitHub.

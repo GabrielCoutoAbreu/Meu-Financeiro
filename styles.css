@@ -273,3 +273,23 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .open-finance-actions .button { width: 100%; }
   .open-finance-summary { display: grid; grid-template-columns: 1fr; }
 }
+
+
+/* Investimentos Open Finance — v1.5 */
+.investment-card { position: relative; overflow: hidden; }
+.investment-card::after { content: ''; position: absolute; right: -48px; bottom: -58px; width: 150px; height: 150px; border-radius: 50%; background: color-mix(in srgb, var(--primary) 7%, transparent); pointer-events: none; }
+.investment-balance { margin-top: 18px; font-size: 1.6rem; line-height: 1; font-weight: 900; letter-spacing: -.04em; }
+.investment-details { display: grid; gap: 9px; margin-top: 17px; padding-top: 14px; border-top: 1px solid var(--border); position: relative; z-index: 1; }
+.investment-details > div { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; font-size: .79rem; }
+.investment-details span { color: var(--muted); }
+.investment-details strong { text-align: right; overflow-wrap: anywhere; }
+.investment-section-header { align-items: flex-end; }
+.investment-summary { display: grid; gap: 3px; text-align: right; flex: 0 0 auto; }
+.investment-summary span { color: var(--muted); font-size: .76rem; }
+.investment-summary strong { font-size: 1.25rem; color: var(--positive); }
+
+@media (max-width: 720px) {
+  .investment-section-header { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .investment-summary { text-align: left; }
+  .investment-balance { font-size: 1.45rem; }
+}
