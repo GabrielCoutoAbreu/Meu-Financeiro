@@ -241,3 +241,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .auth-actions { align-items: flex-start; flex-direction: column; }
   .auth-link { text-align: left; }
 }
+
+
+/* Open Finance / Pluggy */
+.open-finance-card { border-color: color-mix(in srgb, var(--primary) 28%, var(--border)); background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 5%, var(--surface)), var(--surface) 60%); }
+.open-finance-header { align-items: center; }
+.open-finance-kicker { color: var(--primary-strong); font-size: .72rem; font-weight: 900; letter-spacing: .1em; margin-bottom: 5px; }
+.open-finance-empty { border: 1px dashed var(--border); border-radius: 14px; padding: 18px; color: var(--muted); text-align: center; }
+.pluggy-list { display: grid; gap: 8px; }
+.pluggy-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.pluggy-row:first-child { border-top: 0; }
+.bank-avatar { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: color-mix(in srgb, var(--primary) 10%, var(--surface)); flex: 0 0 auto; }
+.spinner-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); animation: pulse-dot 1s infinite alternate; }
+@keyframes pulse-dot { from { opacity: .35; transform: scale(.8); } to { opacity: 1; transform: scale(1.15); } }
+@media (max-width: 720px) {
+  .open-finance-header { align-items: stretch; flex-direction: column; }
+  .open-finance-header .button { width: 100%; min-height: 46px; }
+  .pluggy-row { align-items: flex-start; }
+  .pluggy-row > .chip { flex: 0 0 auto; }
+}

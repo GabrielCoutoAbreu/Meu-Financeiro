@@ -1,25 +1,37 @@
-MEU FINANCEIRO v1.2.1 — AJUSTES DE INTERFACE E SINCRONIZAÇÃO
+MEU FINANCEIRO v1.3.0 — PRIMEIRA INTEGRAÇÃO OPEN FINANCE / PLUGGY
 
-ALTERAÇÕES DESTA VERSÃO
-- Mês exibido no formato curto: Ago/26, Set/26, Out/26 etc.
-- Tela Configurações reorganizada para iPhone/celulares.
-- E-mail, datas, chips e botões não ultrapassam a largura da tela.
-- Botões de Configurações ocupam a largura disponível no celular.
-- Campo Nome do aplicativo passa a ocupar 100% da largura no celular.
-- Ao tocar em Sincronizar, aparece um popup mostrando o andamento e o resultado.
-- O popup diferencia sucesso, falta de internet, conflito e erro.
-- Cache atualizado para forçar o carregamento da nova versão.
+ALTERAÇÕES
+- Nova área Open Finance na tela Contas e cartões.
+- Botão Conectar banco.
+- O aplicativo solicita um Connect Token à Edge Function pluggy-connect-token.
+- Abre o Pluggy Connect oficial em português.
+- Exibe apenas conectores do Brasil e bancos pessoais.
+- Ao concluir a conexão, salva o itemId na tabela public.pluggy_items do Supabase.
+- A lista de bancos conectados é carregada por usuário e protegida pelas políticas RLS.
+- Esta versão ainda NÃO importa saldos e transações automaticamente. Isso será a próxima etapa.
+
+ANTES DE USAR
+No SQL Editor do Supabase execute uma vez:
+
+grant usage, select on sequence public.pluggy_items_id_seq to authenticated;
+
+Isso permite que o ID automático da tabela pluggy_items seja gerado nas inserções feitas pelo usuário autenticado.
 
 COMO ATUALIZAR NO GITHUB
 1. Abra o repositório Meu-Financeiro.
 2. Use Add file > Upload files.
-3. Envie os arquivos desta pasta para a raiz do repositório.
-4. Confirme a substituição dos arquivos existentes.
-5. Faça Commit changes na branch main.
-6. Aguarde o GitHub Pages publicar.
-7. No iPhone, feche completamente o app e abra novamente.
-8. Se ainda aparecer a versão anterior, abra o site no Safari e recarregue uma vez.
+3. Envie os arquivos desta pasta para a raiz.
+4. Faça Commit changes na branch main.
+5. Aguarde o GitHub Pages publicar.
+6. No iPhone, feche completamente o app e abra de novo.
 
-IMPORTANTE
-- Não apague dados do Safari para atualizar o aplicativo.
-- A atualização não altera o banco Supabase nem seus dados financeiros.
+TESTE
+1. Entre em Contas e cartões.
+2. Toque em Conectar banco.
+3. Escolha uma instituição e conclua o consentimento.
+4. Ao final, a instituição deverá aparecer em Bancos conectados.
+
+SEGURANÇA
+- CLIENT_ID e CLIENT_SECRET da Pluggy continuam somente nos Secrets das Edge Functions.
+- O navegador recebe apenas Connect Token temporário.
+- O itemId fica associado ao usuário autenticado no Supabase.

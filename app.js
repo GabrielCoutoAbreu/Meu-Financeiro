@@ -2,8 +2,9 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 3;
-const RELEASE_VERSION = '1.2.1';
+const RELEASE_VERSION = '1.3.0';
 const REMOTE_TABLE = 'user_app_state';
+const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const APP_URL = 'https://gabrielcoutoabreu.github.io/Meu-Financeiro/';
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -31,6 +32,8 @@ let state = defaultState();
 let authSession = null;
 let authReady = false;
 let supabaseClient = null;
+let pluggyItems = [];
+let pluggyItemsLoading = false;
 let syncTimer = null;
 let syncPollTimer = null;
 let syncMeta = { status: 'local', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
@@ -702,6 +705,24 @@ function renderTransactionRow(tx, actions = false) {
   </div>`;
 }
 
+function pluggyStatusLabel(status) {
+  const value = String(status || '').toUpperCase();
+  if (value === 'SUCCESS' || value === 'PARTIAL_SUCCESS' || value === 'UPDATED') return { label: 'Conectado', tone: 'confirmed' };
+  if (value.includes('WAITING') || value.includes('PENDING')) return { label: 'Aguardando', tone: 'pending' };
+  if (value.includes('ERROR') || value.includes('FAILED')) return { label: 'Atenção', tone: 'ignored' };
+  return { label: value ? value.replaceAll('_', ' ') : 'Conectado', tone: 'confirmed' };
+}
+
+function renderPluggyConnections() {
+  if (pluggyItemsLoading) return `<div class="open-finance-empty"><span class="spinner-dot"></span> Carregando conexões bancárias…</div>`;
+  if (!pluggyItems.length) return `<div class="open-finance-empty">Nenhum banco conectado ainda. Use <strong>Conectar banco</strong> para iniciar o Open Finance.</div>`;
+  return `<div class="pluggy-list">${pluggyItems.map(item => {
+    const status = pluggyStatusLabel(item.status);
+    const updated = item.last_sync_at ? shortDate.format(new Date(item.last_sync_at)) : '';
+    return `<div class="pluggy-row"><div class="row-main"><div class="bank-avatar">🏦</div><div><div class="row-title">${esc(item.connector_name || 'Instituição conectada')}</div><div class="row-subtitle">Open Finance · ID ${esc(String(item.item_id || '').slice(0, 8))}${updated ? ` · ${esc(updated)}` : ''}</div></div></div><span class="chip ${status.tone}">${esc(status.label)}</span></div>`;
+  }).join('')}</div>`;
+}
+
 function renderPatrimony() {
   const accountCards = state.accounts.map(account => `<article class="card account-card"><div class="card-header"><div><h2 class="card-title">${esc(account.name)}</h2><p class="card-note">${esc(account.type)}${account.institution ? ` · ${esc(account.institution)}` : ''}</p></div><div class="row-actions"><button class="icon-button" data-action="edit-account" data-id="${account.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-account" data-id="${account.id}" aria-label="Excluir">×</button></div></div><div class="account-balance ${accountBalance(account.id) >= 0 ? 'positive' : 'negative'}">${money.format(accountBalance(account.id))}</div><div class="card-note">Saldo inicial: ${money.format(account.initialBalance)}</div></article>`).join('');
 
@@ -712,8 +733,12 @@ function renderPatrimony() {
   }).join('');
 
   const content = `
-    <section>
-      <div class="card-header"><div><h2 class="card-title">Contas</h2><p class="card-note">Saldos atualizados pelas movimentações confirmadas.</p></div><button class="button primary" data-action="add-account">+ Conta</button></div>
+    <section class="card open-finance-card">
+      <div class="card-header open-finance-header"><div><div class="open-finance-kicker">OPEN FINANCE · PLUGGY</div><h2 class="card-title">Bancos conectados</h2><p class="card-note">Conecte sua instituição com consentimento pelo fluxo oficial do Open Finance.</p></div><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button></div>
+      ${renderPluggyConnections()}
+    </section>
+    <section style="margin-top:26px">
+      <div class="card-header"><div><h2 class="card-title">Contas manuais</h2><p class="card-note">Saldos atualizados pelas movimentações confirmadas.</p></div><button class="button primary" data-action="add-account">+ Conta</button></div>
       <div class="grid three">${accountCards || empty('Cadastre sua primeira conta.')}</div>
     </section>
     <section style="margin-top:26px">
@@ -890,6 +915,92 @@ async function manualSync() {
   } catch (error) {
     console.error('Falha na sincronização manual:', error);
     finishToast(toast, 'Erro ao sincronizar. Tente novamente.', 'error', 3800);
+  }
+}
+
+async function loadPluggyItems({ quiet = false } = {}) {
+  if (!authSession?.user?.id || !supabaseClient) return;
+  pluggyItemsLoading = true;
+  if (ui.page === 'patrimony') render();
+  try {
+    const { data, error } = await supabaseClient
+      .from(PLUGGY_ITEMS_TABLE)
+      .select('item_id,connector_name,status,last_sync_at,created_at')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    pluggyItems = Array.isArray(data) ? data : [];
+  } catch (error) {
+    console.error('Falha ao carregar conexões Pluggy:', error?.message || error);
+    if (!quiet) showToast('Não foi possível carregar as conexões bancárias.', { tone: 'error' });
+  } finally {
+    pluggyItemsLoading = false;
+    if (ui.page === 'patrimony') render();
+  }
+}
+
+async function savePluggyItem(item, connectorName = '') {
+  const itemId = item?.id;
+  if (!itemId || !authSession?.user?.id) throw new Error('A Pluggy não retornou o identificador da conexão.');
+  const record = {
+    user_id: authSession.user.id,
+    item_id: itemId,
+    connector_name: connectorName || item?.connector?.name || item?.connectorName || 'Instituição conectada',
+    status: item?.executionStatus || item?.status || 'SUCCESS',
+    last_sync_at: new Date().toISOString()
+  };
+  const { error } = await supabaseClient
+    .from(PLUGGY_ITEMS_TABLE)
+    .upsert(record, { onConflict: 'user_id,item_id' });
+  if (error) throw error;
+}
+
+async function connectBankWithPluggy() {
+  if (!authSession?.user?.id) return showToast('Entre na sua conta antes de conectar um banco.', { tone: 'warning' });
+  if (!navigator.onLine) return showToast('É necessário estar conectado à internet para abrir o Open Finance.', { tone: 'warning' });
+  if (typeof window.PluggyConnect !== 'function') return showToast('O componente da Pluggy não carregou. Reabra o aplicativo e tente novamente.', { tone: 'error', duration: 4200 });
+
+  const toast = showToast('Preparando conexão segura com a Pluggy…', { tone: 'info', duration: 0 });
+  try {
+    const { data, error } = await supabaseClient.functions.invoke('pluggy-connect-token', { body: {} });
+    if (error) throw error;
+    if (!data?.accessToken) throw new Error(data?.error || 'Connect Token não retornado.');
+
+    let selectedConnectorName = '';
+    finishToast(toast, 'Abrindo Open Finance…', 'success', 1400);
+
+    const pluggyConnect = new window.PluggyConnect({
+      connectToken: data.accessToken,
+      includeSandbox: false,
+      countries: ['BR'],
+      connectorTypes: ['PERSONAL_BANK'],
+      language: 'pt',
+      theme: state.preferences.darkMode ? 'dark' : 'light',
+      forceOauthInBrowser: true,
+      onEvent: (payload) => {
+        if (payload?.event === 'SELECTED_INSTITUTION' && payload?.connector?.name) selectedConnectorName = payload.connector.name;
+      },
+      onSuccess: async ({ item }) => {
+        const doneToast = showToast('Banco conectado. Salvando a conexão…', { tone: 'info', duration: 0 });
+        try {
+          await savePluggyItem(item, selectedConnectorName);
+          await loadPluggyItems({ quiet: true });
+          finishToast(doneToast, 'Banco conectado com sucesso.', 'success', 3200);
+        } catch (saveError) {
+          console.error('Falha ao salvar item Pluggy:', saveError?.message || saveError);
+          finishToast(doneToast, 'O banco conectou, mas não foi possível salvar a referência no Supabase.', 'error', 5000);
+        }
+      },
+      onError: (error) => {
+        const status = error?.data?.item?.executionStatus || '';
+        const pending = status === 'USER_AUTHORIZATION_PENDING' || String(status).includes('WAITING');
+        showToast(pending ? 'A autorização bancária ainda está pendente. Conclua a etapa solicitada pelo banco.' : (error?.message || 'A conexão bancária não foi concluída.'), { tone: pending ? 'warning' : 'error', duration: 5200 });
+      }
+    });
+
+    pluggyConnect.init();
+  } catch (error) {
+    console.error('Falha ao abrir Pluggy Connect:', error?.message || error);
+    finishToast(toast, 'Não foi possível iniciar o Open Finance. Tente novamente.', 'error', 4200);
   }
 }
 
@@ -1184,6 +1295,7 @@ async function activateSession(session) {
   ui.authMessage = '';
   render();
   await initialCloudSync();
+  await loadPluggyItems({ quiet: true });
   startSyncPolling();
 }
 
@@ -1194,6 +1306,7 @@ async function logoutCurrentDevice() {
   stopSyncPolling();
   authSession = null;
   state = defaultState();
+  pluggyItems = [];
   syncMeta = { status: 'local', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
   ui.page = 'dashboard';
   render();
@@ -1213,13 +1326,14 @@ function stopSyncPolling() {
 
 document.addEventListener('click', event => {
   const pageButton = event.target.closest('[data-page]');
-  if (pageButton) { ui.page = pageButton.dataset.page; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  if (pageButton) { ui.page = pageButton.dataset.page; render(); if (ui.page === 'patrimony') loadPluggyItems({ quiet: true }); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const action = button.dataset.action;
   const id = button.dataset.id;
   if (action === 'auth-mode') { ui.authMode = button.dataset.mode || 'signin'; ui.authMessage = ''; render(); return; }
   if (action === 'sync-now') { manualSync(); return; }
+  if (action === 'connect-bank') { connectBankWithPluggy(); return; }
   if (action === 'force-cloud') { pushStateToCloud({ force: true }).then(() => render()); return; }
   if (action === 'force-pull') {
     if (syncMeta.pending && !window.confirm('Usar a versão da nuvem? Alterações ainda não sincronizadas deste dispositivo serão substituídas.')) return;
@@ -1343,6 +1457,7 @@ async function initializeApp() {
           authSession = null;
           authReady = true;
           state = defaultState();
+          pluggyItems = [];
           render();
           return;
         }
