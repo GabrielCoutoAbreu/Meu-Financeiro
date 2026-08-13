@@ -1,13 +1,15 @@
-MEU FINANCEIRO v1.5.1 — AJUSTE RESPONSIVO PARA IPHONE
+MEU FINANCEIRO v1.6.0 — RELATÓRIOS POR PERÍODO
 
-Correções desta versão:
-- Visão Geral: movimentações recentes reorganizadas no iPhone, sem sobreposição entre descrição, valor e status.
-- Movimentações: linhas reorganizadas no iPhone, sem texto/valores sobrepostos.
-- Cabeçalho móvel: seletor de mês passa a ocupar uma linha própria e os botões não ultrapassam a largura da tela.
-- Filtros de Movimentações: layout responsivo em grade, adaptado à largura do iPhone.
-- Proteção contra rolagem horizontal acidental, inclusive na barra inferior de navegação.
-- Área segura superior reforçada para o modo instalado no iPhone.
-- Nenhuma alteração no banco, Open Finance ou dados financeiros.
+Atualização da tela Relatórios:
+- filtro rápido por 1, 3, 6 ou 12 meses;
+- opção de todo o histórico disponível;
+- intervalo personalizado por data inicial e final;
+- indicadores de entradas, saídas, resultado e quantidade de movimentações do período;
+- distribuição de gastos por categoria respeitando o período escolhido;
+- qualidade dos dados filtrada pelo mesmo intervalo;
+- evolução mensal de entradas e saídas no período;
+- exportação CSV somente do período selecionado ou de todo o histórico;
+- layout responsivo para iPhone.
 
-Atualize no GitHub: app.js, index.html, styles.css, sw.js e LEIA-ME.txt.
-Depois aguarde o GitHub Pages publicar, feche totalmente o app no iPhone e abra novamente.
+Nenhuma alteração de banco de dados, Supabase, Pluggy ou Open Finance é necessária.
+Substitua app.js, index.html, styles.css, sw.js e LEIA-ME.txt no GitHub e faça o commit.

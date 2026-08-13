@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 4;
-const RELEASE_VERSION = '1.5.1';
+const RELEASE_VERSION = '1.6.0';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
@@ -54,6 +54,9 @@ let ui = {
   transactionSearch: '',
   transactionType: 'all',
   transactionStatus: 'all',
+  reportRange: '6m',
+  reportStart: '',
+  reportEnd: '',
   deferredInstallPrompt: null,
   authMode: 'signin',
   authMessage: ''
@@ -111,6 +114,109 @@ function shiftDateDays(value, amount) {
   if (!d) return value;
   d.setDate(d.getDate() + amount);
   return isoDate(d);
+}
+
+function monthStart(key) {
+  return `${key}-01`;
+}
+
+function monthEnd(key) {
+  const d = monthDate(key);
+  return isoDate(new Date(d.getFullYear(), d.getMonth() + 1, 0, 12));
+}
+
+function dateKey(value) {
+  if (!value) return '';
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? '' : isoDate(parsed);
+}
+
+function formatDateBr(value) {
+  const d = parseDate(dateKey(value));
+  return d ? shortDate.format(d) : '—';
+}
+
+function reportRangeBounds() {
+  const preset = ui.reportRange || '6m';
+  const endMonth = ui.month;
+
+  if (preset === 'custom') {
+    let start = dateKey(ui.reportStart) || monthStart(shiftMonth(endMonth, -5));
+    let end = dateKey(ui.reportEnd) || monthEnd(endMonth);
+    if (start > end) [start, end] = [end, start];
+    return { start, end, preset };
+  }
+
+  if (preset === 'all') {
+    const dates = allTransactions().map(tx => dateKey(transactionViewDate(tx))).filter(Boolean).sort();
+    if (dates.length) return { start: dates[0], end: dates[dates.length - 1], preset };
+    return { start: monthStart(endMonth), end: monthEnd(endMonth), preset };
+  }
+
+  const months = { '1m': 1, '3m': 3, '6m': 6, '12m': 12 };
+  const count = months[preset] || 6;
+  return {
+    start: monthStart(shiftMonth(endMonth, -(count - 1))),
+    end: monthEnd(endMonth),
+    preset
+  };
+}
+
+function reportRangeLabel(range = reportRangeBounds()) {
+  if (range.start.slice(0, 7) === range.end.slice(0, 7) && range.start.endsWith('-01')) {
+    return formatMonthShort(range.start.slice(0, 7));
+  }
+  return `${formatDateBr(range.start)} a ${formatDateBr(range.end)}`;
+}
+
+function periodTransactions(range = reportRangeBounds(), includePending = true) {
+  return allTransactions().filter(tx => {
+    if (!validForCalculations(tx)) return false;
+    if (!includePending && tx.status !== 'confirmed') return false;
+    const key = dateKey(transactionViewDate(tx));
+    return key && key >= range.start && key <= range.end;
+  });
+}
+
+function periodTotals(range = reportRangeBounds()) {
+  const confirmed = periodTransactions(range, false);
+  const income = confirmed.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const expense = confirmed.filter(tx => tx.type === 'expense' || tx.type === 'card').reduce((sum, tx) => sum + num(tx.amount), 0);
+  return { income, expense, result: income - expense, count: confirmed.length };
+}
+
+function periodCategoryTotals(range = reportRangeBounds()) {
+  const map = new Map();
+  periodTransactions(range, false)
+    .filter(tx => tx.type === 'expense' || tx.type === 'card')
+    .forEach(tx => map.set(tx.category || 'Sem categoria', (map.get(tx.category || 'Sem categoria') || 0) + num(tx.amount)));
+  return [...map.entries()].map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
+}
+
+function periodMonthlyResults(range = reportRangeBounds()) {
+  const grouped = new Map();
+  periodTransactions(range, false).forEach(tx => {
+    const key = dateKey(transactionViewDate(tx)).slice(0, 7);
+    if (!key) return;
+    if (!grouped.has(key)) grouped.set(key, { income: 0, expense: 0 });
+    const bucket = grouped.get(key);
+    if (tx.type === 'income') bucket.income += num(tx.amount);
+    if (tx.type === 'expense' || tx.type === 'card') bucket.expense += num(tx.amount);
+  });
+
+  const months = [];
+  let key = range.start.slice(0, 7);
+  const last = range.end.slice(0, 7);
+  let safety = 0;
+  while (key <= last && safety < 120) {
+    const bucket = grouped.get(key) || { income: 0, expense: 0 };
+    months.push({ key, ...bucket, result: bucket.income - bucket.expense });
+    key = shiftMonth(key, 1);
+    safety++;
+  }
+  return months;
 }
 
 function esc(value) {
@@ -1006,41 +1112,74 @@ function renderPlanning() {
 }
 
 function renderReports() {
-  const categories = categoryTotals();
+  const range = reportRangeBounds();
+  const periodLabel = reportRangeLabel(range);
+  const categories = periodCategoryTotals(range);
+  const totals = periodTotals(range);
   const maxCategory = Math.max(1, ...categories.map(item => item.total));
-  const months = Array.from({ length: 6 }, (_, i) => shiftMonth(ui.month, i - 5));
-  const results = months.map(key => ({ key, ...monthTotals(key) }));
+  const results = periodMonthlyResults(range);
   const maxFlow = Math.max(1, ...results.flatMap(item => [item.income, item.expense]));
-  const reportTransactions = allTransactions();
-  const ignored = reportTransactions.filter(tx => tx.status === 'ignored').length;
+  const reportTransactions = periodTransactions(range, true);
+  const ignored = allTransactions().filter(tx => {
+    const key = dateKey(transactionViewDate(tx));
+    return tx.status === 'ignored' && key && key >= range.start && key <= range.end;
+  }).length;
   const pending = reportTransactions.filter(tx => tx.status === 'pending').length;
   const uncategorized = reportTransactions.filter(tx => !tx.category || tx.category === 'Sem categoria').length;
 
+  const presets = [
+    ['1m', '1 mês'],
+    ['3m', '3 meses'],
+    ['6m', '6 meses'],
+    ['12m', '12 meses'],
+    ['all', 'Todo histórico'],
+    ['custom', 'Personalizado']
+  ];
+
+  const customRange = ui.reportRange === 'custom' ? `
+    <div class="report-custom-range">
+      <div class="field"><label>Data inicial</label><input class="input" id="report-start" type="date" value="${esc(range.start)}"></div>
+      <div class="field"><label>Data final</label><input class="input" id="report-end" type="date" value="${esc(range.end)}"></div>
+    </div>` : '';
+
   const content = `
-    <section class="grid two">
+    <article class="card report-period-card">
+      <div class="card-header"><div><h2 class="card-title">Período do relatório</h2><p class="card-note">Escolha um intervalo maior ou defina datas específicas.</p></div><span class="chip confirmed report-period-label">${esc(periodLabel)}</span></div>
+      <div class="report-period-presets">${presets.map(([value, label]) => `<button class="button small report-period-button ${ui.reportRange === value ? 'primary active' : ''}" data-action="report-period" data-period="${value}">${label}</button>`).join('')}</div>
+      ${customRange}
+    </article>
+
+    <section class="grid kpis report-kpis" style="margin-top:16px">
+      <article class="card"><div class="kpi-label">Entradas confirmadas</div><div class="kpi-value positive">${money.format(totals.income)}</div><div class="kpi-meta">${esc(periodLabel)}</div></article>
+      <article class="card"><div class="kpi-label">Saídas confirmadas</div><div class="kpi-value negative">${money.format(totals.expense)}</div><div class="kpi-meta">${esc(periodLabel)}</div></article>
+      <article class="card"><div class="kpi-label">Resultado</div><div class="kpi-value ${totals.result >= 0 ? 'positive' : 'negative'}">${money.format(totals.result)}</div><div class="kpi-meta">Entradas menos saídas</div></article>
+      <article class="card"><div class="kpi-label">Movimentações</div><div class="kpi-value">${reportTransactions.length}</div><div class="kpi-meta">${totals.count} confirmadas</div></article>
+    </section>
+
+    <section class="grid two" style="margin-top:16px">
       <article class="card">
-        <div class="card-header"><div><h2 class="card-title">Distribuição dos gastos</h2><p class="card-note">Por categoria no mês selecionado</p></div></div>
-        ${categories.length ? `<div class="chart">${categories.map(item => `<div class="chart-row"><div class="chart-label">${esc(item.category)}</div><div class="chart-track"><div class="chart-bar" style="width:${(item.total / maxCategory) * 100}%"></div></div><div class="chart-value">${money.format(item.total)}</div></div>`).join('')}</div>` : empty('Sem gastos confirmados para analisar.')}
+        <div class="card-header"><div><h2 class="card-title">Distribuição dos gastos</h2><p class="card-note">Por categoria no período selecionado</p></div></div>
+        ${categories.length ? `<div class="chart">${categories.map(item => `<div class="chart-row"><div class="chart-label">${esc(item.category)}</div><div class="chart-track"><div class="chart-bar" style="width:${(item.total / maxCategory) * 100}%"></div></div><div class="chart-value">${money.format(item.total)}</div></div>`).join('')}</div>` : empty('Sem gastos confirmados para analisar neste período.')}
       </article>
       <article class="card">
-        <div class="card-header"><div><h2 class="card-title">Qualidade dos dados</h2><p class="card-note">Itens que merecem revisão</p></div></div>
+        <div class="card-header"><div><h2 class="card-title">Qualidade dos dados</h2><p class="card-note">Itens do período que merecem revisão</p></div></div>
         <div class="stack">
           <div class="list-row"><span>Transações pendentes</span><strong class="${pending ? 'warning' : 'positive'}">${pending}</strong></div>
           <div class="list-row"><span>Transações ignoradas</span><strong>${ignored}</strong></div>
           <div class="list-row"><span>Sem categoria</span><strong class="${uncategorized ? 'warning' : 'positive'}">${uncategorized}</strong></div>
-          <div class="list-row"><span>Registros totais</span><strong>${reportTransactions.length}</strong></div>
+          <div class="list-row"><span>Registros no período</span><strong>${reportTransactions.length}</strong></div>
         </div>
       </article>
     </section>
 
     <article class="card" style="margin-top:16px">
-      <div class="card-header"><div><h2 class="card-title">Entradas e saídas — 6 meses</h2><p class="card-note">Comparativo baseado em transações confirmadas</p></div></div>
-      <div class="chart">${results.map(item => `<div class="chart-row"><div class="chart-label">${esc(formatMonthShort(item.key))}</div><div><div class="chart-track" title="Ganhos"><div class="chart-bar" style="width:${(item.income / maxFlow) * 100}%"></div></div><div class="chart-track" title="Gastos" style="margin-top:5px"><div class="chart-bar" style="width:${(item.expense / maxFlow) * 100}%;background:var(--negative)"></div></div></div><div class="chart-value ${item.result >= 0 ? 'positive' : 'negative'}">${money.format(item.result)}</div></div>`).join('')}</div>
+      <div class="card-header"><div><h2 class="card-title">Entradas e saídas</h2><p class="card-note">Evolução mensal · ${esc(periodLabel)}</p></div></div>
+      <div class="chart report-flow-chart">${results.map(item => `<div class="chart-row"><div class="chart-label">${esc(formatMonthShort(item.key))}</div><div><div class="chart-track" title="Ganhos"><div class="chart-bar" style="width:${(item.income / maxFlow) * 100}%"></div></div><div class="chart-track" title="Gastos" style="margin-top:5px"><div class="chart-bar" style="width:${(item.expense / maxFlow) * 100}%;background:var(--negative)"></div></div></div><div class="chart-value ${item.result >= 0 ? 'positive' : 'negative'}">${money.format(item.result)}</div></div>`).join('')}</div>
     </article>
 
     <article class="card" style="margin-top:16px">
-      <div class="card-header"><div><h2 class="card-title">Exportação</h2><p class="card-note">Gere arquivos para planilha ou uma cópia completa.</p></div></div>
-      <div class="toolbar"><button class="button primary" data-action="export-csv">Exportar transações em CSV</button><button class="button" data-action="backup-json">Baixar cópia JSON</button></div>
+      <div class="card-header"><div><h2 class="card-title">Exportação</h2><p class="card-note">Exporte somente o período selecionado ou gere uma cópia completa.</p></div></div>
+      <div class="toolbar"><button class="button primary" data-action="export-report-csv">Exportar período em CSV</button><button class="button" data-action="export-csv">Exportar tudo em CSV</button><button class="button" data-action="backup-json">Baixar cópia JSON</button></div>
     </article>`;
 
   return pageShell(content);
@@ -1482,11 +1621,11 @@ function confirmDelete(message, callback) {
   if (window.confirm(message)) { callback(); persist(); render(); showToast('Registro excluído.'); }
 }
 
-function exportCsv() {
+function exportTransactionsCsv(transactions, filename, toastMessage) {
   const headers = ['Descrição','Valor','Tipo','Data','Vencimento','Pagamento','Situação','Origem','Conta/Cartão','Categoria','Subcategoria','Membro','Tags','Forma de pagamento','Parcela','Observações'];
   const quote = value => `"${String(value ?? '').replaceAll('"','""')}"`;
   const lines = [headers.map(quote).join(';')];
-  [...allTransactions()].sort((a,b) => (a.date || '').localeCompare(b.date || '')).forEach(tx => {
+  [...transactions].sort((a,b) => (transactionViewDate(a) || '').localeCompare(transactionViewDate(b) || '')).forEach(tx => {
     const source = tx.origin === 'openfinance'
       ? (tx.sourceLabel || 'Open Finance')
       : (tx.type === 'card' ? nameById(state.cards, tx.cardId, '') : nameById(state.accounts, tx.accountId, ''));
@@ -1496,8 +1635,19 @@ function exportCsv() {
       tx.category, tx.subcategory, tx.member, (tx.tags || []).join(', '), tx.paymentMethod, `${tx.installmentCurrent || 1}/${tx.installmentTotal || 1}`, tx.notes
     ].map(quote).join(';'));
   });
-  downloadBlob(`meu-financeiro-transacoes-${isoDate()}.csv`, '\ufeff' + lines.join('\n'), 'text/csv;charset=utf-8');
-  showToast('Arquivo CSV gerado com dados manuais e Open Finance.');
+  downloadBlob(filename, '\ufeff' + lines.join('\n'), 'text/csv;charset=utf-8');
+  showToast(toastMessage);
+}
+
+function exportCsv() {
+  exportTransactionsCsv(allTransactions(), `meu-financeiro-transacoes-${isoDate()}.csv`, 'Arquivo CSV gerado com dados manuais e Open Finance.');
+}
+
+function exportReportCsv() {
+  const range = reportRangeBounds();
+  const rows = periodTransactions(range, true);
+  const suffix = `${range.start}-a-${range.end}`;
+  exportTransactionsCsv(rows, `meu-financeiro-relatorio-${suffix}.csv`, `CSV do período ${reportRangeLabel(range)} gerado.`);
 }
 
 function backupJson() {
@@ -1654,6 +1804,15 @@ document.addEventListener('click', event => {
   if (action === 'logout') { logoutCurrentDevice(); return; }
   if (action === 'prev-month') { ui.month = shiftMonth(ui.month, -1); render(); }
   if (action === 'next-month') { ui.month = shiftMonth(ui.month, 1); render(); }
+  if (action === 'report-period') {
+    ui.reportRange = button.dataset.period || '6m';
+    if (ui.reportRange === 'custom') {
+      if (!ui.reportStart) ui.reportStart = monthStart(shiftMonth(ui.month, -5));
+      if (!ui.reportEnd) ui.reportEnd = monthEnd(ui.month);
+    }
+    render();
+    return;
+  }
   if (action === 'close-modal') {
     // Se o clique veio do fundo escurecido, fecha somente quando o próprio fundo foi tocado.
     // Cliques dentro da janela não devem fechá-la. Os botões × e Cancelar fecham normalmente.
@@ -1689,6 +1848,7 @@ document.addEventListener('click', event => {
   if (action === 'contribute-goal') openGoalContribution(id);
   if (action === 'delete-goal') confirmDelete('Excluir este objetivo?', () => state.goals = state.goals.filter(item => item.id !== id));
   if (action === 'export-csv') exportCsv();
+  if (action === 'export-report-csv') exportReportCsv();
   if (action === 'backup-json') backupJson();
   if (action === 'restore-json') document.getElementById('restore-file').click();
   if (action === 'reset-data') {
@@ -1706,6 +1866,8 @@ document.addEventListener('input', event => {
 document.addEventListener('change', event => {
   if (event.target.id === 'transaction-type-filter') { ui.transactionType = event.target.value; render(); }
   if (event.target.id === 'transaction-status-filter') { ui.transactionStatus = event.target.value; render(); }
+  if (event.target.id === 'report-start') { ui.reportStart = event.target.value; render(); }
+  if (event.target.id === 'report-end') { ui.reportEnd = event.target.value; render(); }
   if (event.target.id === 'dark-mode') { state.preferences.darkMode = event.target.checked; persist(); render(); }
   if (event.target.id === 'cash-basis') { state.preferences.basis = event.target.checked ? 'cash' : 'accrual'; persist(); render(); }
   if (event.target.id === 'restore-file' && event.target.files?.[0]) { restoreJson(event.target.files[0]); event.target.value = ''; }
