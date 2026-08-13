@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 4;
-const RELEASE_VERSION = '1.5.0';
+const RELEASE_VERSION = '1.5.1';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
@@ -835,8 +835,8 @@ function renderTransactions() {
     .sort((a, b) => (transactionViewDate(b) || '').localeCompare(transactionViewDate(a) || ''));
 
   const content = `
-    <article class="card">
-      <div class="toolbar">
+    <article class="card transactions-card">
+      <div class="toolbar transaction-toolbar">
         <input class="input search" id="transaction-search" placeholder="Buscar descrição, categoria, membro ou tag" value="${esc(ui.transactionSearch)}">
         <select class="select filter-select" id="transaction-type-filter">
           ${selectOptions([['all','Todos os tipos'],['income','Ganhos'],['expense','Gastos'],['card','Cartão'],['card_payment','Pagamento cartão'],['transfer','Transferências']], ui.transactionType)}
@@ -865,9 +865,9 @@ function renderTransactionRow(tx, actions = false) {
   const valueClass = tx.type === 'card_payment' ? 'positive' : isNeutral ? '' : isPositive ? 'positive' : 'negative';
   const sign = isPositive ? '+' : tx.type === 'card_payment' ? '−' : isNeutral ? '' : '−';
   const canEdit = actions && !tx.readOnly && tx.origin !== 'openfinance';
-  return `<div class="list-row">
-    <div class="row-main"><div class="avatar">${typeIcon(tx.type)}</div><div><div class="row-title">${esc(tx.description)}</div><div class="row-subtitle">${subtitle} · ${date ? shortDate.format(parseDate(date)) : 'Sem data'}</div></div></div>
-    <div class="row-actions"><div style="text-align:right"><div class="row-value ${valueClass}">${sign}${money.format(tx.amount)}</div><span class="chip ${tx.status}">${tx.status === 'confirmed' ? 'Confirmada' : tx.status === 'pending' ? 'Pendente' : 'Ignorada'}</span></div>${canEdit ? `<button class="icon-button" data-action="edit-transaction" data-id="${tx.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-transaction" data-id="${tx.id}" aria-label="Excluir">×</button>` : ''}</div>
+  return `<div class="list-row transaction-row">
+    <div class="row-main transaction-main"><div class="avatar">${typeIcon(tx.type)}</div><div class="row-content"><div class="row-title">${esc(tx.description)}</div><div class="row-subtitle">${subtitle} · ${date ? shortDate.format(parseDate(date)) : 'Sem data'}</div></div></div>
+    <div class="row-actions transaction-actions"><div class="row-summary"><div class="row-value ${valueClass}">${sign}${money.format(tx.amount)}</div><span class="chip ${tx.status}">${tx.status === 'confirmed' ? 'Confirmada' : tx.status === 'pending' ? 'Pendente' : 'Ignorada'}</span></div>${canEdit ? `<button class="icon-button" data-action="edit-transaction" data-id="${tx.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-transaction" data-id="${tx.id}" aria-label="Excluir">×</button>` : ''}</div>
   </div>`;
 }
 

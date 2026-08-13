@@ -1,20 +1,13 @@
-MEU FINANCEIRO v1.5.0 — INVESTIMENTOS OPEN FINANCE
+MEU FINANCEIRO v1.5.1 — AJUSTE RESPONSIVO PARA IPHONE
 
-NOVIDADES
-- Investimentos da Pluggy/Supabase exibidos em Contas e cartões.
-- Patrimônio líquido passa a incluir o saldo atual dos investimentos.
-- Resumo Open Finance mostra quantidade e patrimônio investido.
-- Cards de investimento mostram tipo, subtipo, banco, saldo atual, valor aplicado, resgate, emissor e vencimento quando disponíveis.
-- Conexões MeuPluggy passam a usar o nome da instituição inferido pelos produtos (ex.: Santander e Bradesco).
-- Atualizar dados passa a informar também quantos investimentos foram sincronizados.
+Correções desta versão:
+- Visão Geral: movimentações recentes reorganizadas no iPhone, sem sobreposição entre descrição, valor e status.
+- Movimentações: linhas reorganizadas no iPhone, sem texto/valores sobrepostos.
+- Cabeçalho móvel: seletor de mês passa a ocupar uma linha própria e os botões não ultrapassam a largura da tela.
+- Filtros de Movimentações: layout responsivo em grade, adaptado à largura do iPhone.
+- Proteção contra rolagem horizontal acidental, inclusive na barra inferior de navegação.
+- Área segura superior reforçada para o modo instalado no iPhone.
+- Nenhuma alteração no banco, Open Finance ou dados financeiros.
 
-ARQUIVOS PARA ATUALIZAR NO GITHUB
-- app.js
-- index.html
-- styles.css
-- sw.js
-- LEIA-ME.txt
-
-IMPORTANTE
-- Esta versão pressupõe que a tabela public.pluggy_investments já foi criada no Supabase e que a Edge Function pluggy-import-data foi atualizada para importar investimentos.
-- Não coloque PLUGGY_CLIENT_SECRET, sb_secret_ ou service_role no GitHub.
+Atualize no GitHub: app.js, index.html, styles.css, sw.js e LEIA-ME.txt.
+Depois aguarde o GitHub Pages publicar, feche totalmente o app no iPhone e abra novamente.
