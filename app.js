@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 4;
-const RELEASE_VERSION = '1.6.2';
+const RELEASE_VERSION = '1.7.0';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
@@ -2273,5 +2273,705 @@ async function initializeApp() {
     render();
   }
 }
+
+// ===== Revisão financeira — v1.7.0 =====
+// Separa fluxo de caixa, consumo e patrimônio; traduz categorias e trata regras pessoais.
+
+const PLUGGY_CATEGORY_PT = new Map(Object.entries({
+  'income': 'Receitas',
+  'salary': 'Salário',
+  'retirement': 'Aposentadoria',
+  'entrepreneurial activities': 'Atividade empresarial',
+  'government aid': 'Benefícios governamentais',
+  'non-recurring income': 'Receitas eventuais',
+  'loans and financing': 'Empréstimos e financiamentos',
+  'late payment and overdraft costs': 'Juros e cheque especial',
+  'interests charged': 'Juros cobrados',
+  'loans': 'Empréstimos',
+  'financing': 'Financiamento',
+  'real estate financing': 'Financiamento imobiliário',
+  'vehicle financing': 'Financiamento de veículo',
+  'student loan': 'Financiamento estudantil',
+  'investments': 'Investimentos',
+  'automatic investment': 'Aplicação automática',
+  'fixed income': 'Renda fixa',
+  'mutual funds': 'Fundos de investimento',
+  'variable income': 'Renda variável',
+  'margin': 'Margem',
+  'proceeds interests and dividends': 'Rendimentos e dividendos',
+  'proceeds interests': 'Rendimentos e dividendos',
+  'pension': 'Previdência',
+  'same person transfer': 'Transferência entre contas próprias',
+  'same person transfer - cash': 'Transferência própria - Dinheiro',
+  'same person transfer - pix': 'Transferência própria - PIX',
+  'same person transfer - ted': 'Transferência própria - TED',
+  'transfers': 'Transferências',
+  'transfer - bank slip (boleto)': 'Transferência - Boleto',
+  'transfer - cash': 'Transferência - Dinheiro',
+  'transfer - check': 'Transferência - Cheque',
+  'transfer - doc': 'Transferência - DOC',
+  'transfer - foreign exchange': 'Transferência - Câmbio',
+  'transfer - internal': 'Transferência interna',
+  'transfer - pix': 'Transferência - PIX',
+  'transfer - ted': 'Transferência - TED',
+  'credit card payment': 'Pagamento de cartão',
+  'third-party transfers': 'Transferências para terceiros',
+  'bank slip': 'Boleto',
+  'debt card': 'Cartão de débito',
+  'legal obligations': 'Obrigações legais',
+  'blocked balances': 'Valores bloqueados',
+  'alimony': 'Pensão alimentícia',
+  'services': 'Serviços',
+  'telecommunications': 'Telecomunicações',
+  'internet': 'Internet',
+  'mobile': 'Celular',
+  'tv': 'TV',
+  'education': 'Educação',
+  'online courses': 'Cursos online',
+  'university': 'Faculdade',
+  'school': 'Escola',
+  'kindergarten': 'Educação infantil',
+  'wellness and fitness': 'Saúde e bem-estar',
+  'gyms and fitness centers': 'Academia',
+  'sports practice': 'Prática esportiva',
+  'wellness': 'Bem-estar',
+  'tickets': 'Ingressos',
+  'stadiums and arenas': 'Estádios e arenas',
+  'landmarks and museums': 'Museus e atrações',
+  'cinema, theater and concerts': 'Cinema, teatro e shows',
+  'shopping': 'Compras',
+  'online shopping': 'Compras online',
+  'electronics': 'Eletrônicos',
+  'pet supplies and vet': 'Pets e veterinário',
+  'clothing': 'Vestuário',
+  'kids and toys': 'Crianças e brinquedos',
+  'bookstore': 'Livraria',
+  'sports goods': 'Artigos esportivos',
+  'office supplies': 'Material de escritório',
+  'cashback': 'Cashback',
+  'digital services': 'Serviços digitais',
+  'gaming': 'Jogos',
+  'video streaming': 'Streaming de vídeo',
+  'music streaming': 'Streaming de música',
+  'groceries': 'Supermercado',
+  'food and drinks': 'Alimentação',
+  'eating out': 'Restaurantes',
+  'food delivery': 'Delivery',
+  'travel': 'Viagem',
+  'airport and airlines': 'Passagens aéreas',
+  'accommodation': 'Hospedagem',
+  'mileage programs': 'Milhas',
+  'bus tickets': 'Passagens rodoviárias',
+  'donations': 'Doações',
+  'gambling': 'Apostas',
+  'lottery': 'Loteria',
+  'online bet': 'Apostas online',
+  'taxes': 'Impostos',
+  'income taxes': 'Imposto de renda',
+  'taxes on investments': 'Impostos sobre investimentos',
+  'tax on financial operations': 'IOF',
+  'bank fees': 'Tarifas bancárias',
+  'account fees': 'Tarifas de conta',
+  'wire transfer fees and atm fees': 'Tarifas de transferências e saques',
+  'credit card fees': 'Tarifas de cartão',
+  'housing': 'Moradia',
+  'rent': 'Aluguel',
+  'houseware': 'Casa e utensílios',
+  'urban land and building tax': 'IPTU',
+  'utilities': 'Contas da casa',
+  'water': 'Água',
+  'electricity': 'Energia elétrica',
+  'gas': 'Gás',
+  'healthcare': 'Saúde',
+  'dentist': 'Dentista',
+  'pharmacy': 'Farmácia',
+  'optometry': 'Ótica e visão',
+  'hospital clinics and labs': 'Hospitais, clínicas e exames',
+  'transportation': 'Transporte',
+  'taxi and ride-hailing': 'Táxi e transporte por aplicativo',
+  'public transportation': 'Transporte público',
+  'car rental': 'Aluguel de veículo',
+  'bicycle': 'Bicicleta',
+  'automotive': 'Automóvel',
+  'gas stations': 'Combustível',
+  'parking': 'Estacionamento',
+  'tolls and in-vehicle payment': 'Pedágios',
+  'vehicle ownership taxes and fees': 'Impostos e taxas do veículo',
+  'vehicle maintenance': 'Manutenção do veículo',
+  'traffic tickets': 'Multas de trânsito',
+  'insurance': 'Seguros',
+  'life insurance': 'Seguro de vida',
+  'home insurance': 'Seguro residencial',
+  'health insurance': 'Plano de saúde',
+  'vehicle insurance': 'Seguro do veículo',
+  'leisure': 'Lazer',
+  'other': 'Outros'
+}));
+
+function localizedCategory(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Sem categoria';
+  return PLUGGY_CATEGORY_PT.get(normalizeSearchText(raw)) || raw;
+}
+
+function pluggyIsSalary(row) {
+  const description = normalizeSearchText(`${row?.description || ''} ${row?.description_raw || ''}`);
+  const category = normalizeSearchText(row?.category);
+  return description.includes('ted conta salario gabriel couto de abreu')
+    || category === 'salary'
+    || /(^|\b)salario(\b|$)/i.test(description);
+}
+
+function pluggyExplicitOwnTransfer(row) {
+  if (pluggyIsSalary(row)) return false;
+  const category = normalizeSearchText(row.category);
+  const description = normalizeSearchText(`${row.description || ''} ${row.description_raw || ''}`);
+  if (category.includes('same person transfer')) return true;
+  return /(mesma titularidade|mesmo titular|mesma pessoa|conta propria|entre minhas contas|entre contas proprias)/i.test(description);
+}
+
+function rebuildOpenFinanceIndexes() {
+  pluggyAccountMap = new Map(pluggyAccounts.map(account => [account.pluggy_account_id, account]));
+  pluggyNeutralBankIds = new Set();
+  pluggySuppressedIds = new Set();
+  pluggyInternalTransferIds = new Set();
+
+  const bankRows = pluggyTransactions.filter(row => {
+    const account = pluggyAccountMap.get(row.pluggy_account_id);
+    return String(account?.type || '').toUpperCase() === 'BANK';
+  });
+
+  bankRows.forEach(row => {
+    if (!pluggyIsSalary(row) && pluggyExplicitOwnTransfer(row)) pluggyInternalTransferIds.add(row.pluggy_transaction_id);
+  });
+
+  const credits = bankRows.filter(row => String(row.transaction_type || '').toUpperCase() === 'CREDIT' && !pluggyIsSalary(row));
+  const usedCredits = new Set();
+
+  bankRows
+    .filter(row => String(row.transaction_type || '').toUpperCase() === 'DEBIT' && !pluggyIsSalary(row))
+    .forEach(debit => {
+      const amount = Math.abs(num(debit.amount));
+      const debitTime = new Date(debit.transaction_date).getTime();
+      if (!amount || !Number.isFinite(debitTime)) return;
+
+      const candidates = credits
+        .filter(credit => {
+          if (usedCredits.has(credit.pluggy_transaction_id)) return false;
+          if (credit.pluggy_account_id === debit.pluggy_account_id) return false;
+          if (Math.abs(Math.abs(num(credit.amount)) - amount) >= 0.01) return false;
+          const creditTime = new Date(credit.transaction_date).getTime();
+          if (!Number.isFinite(creditTime) || Math.abs(creditTime - debitTime) > 3 * 86400000) return false;
+          return pluggyTransferEvidence(debit) || pluggyTransferEvidence(credit);
+        })
+        .sort((a, b) => {
+          const at = Math.abs(new Date(a.transaction_date).getTime() - debitTime);
+          const bt = Math.abs(new Date(b.transaction_date).getTime() - debitTime);
+          const aStrong = pluggyTransferEvidence(debit) && pluggyTransferEvidence(a) ? -1 : 0;
+          const bStrong = pluggyTransferEvidence(debit) && pluggyTransferEvidence(b) ? -1 : 0;
+          return aStrong - bStrong || at - bt;
+        });
+
+      const matched = candidates[0];
+      if (!matched) return;
+      pluggyInternalTransferIds.add(debit.pluggy_transaction_id);
+      pluggyInternalTransferIds.add(matched.pluggy_transaction_id);
+      usedCredits.add(matched.pluggy_transaction_id);
+    });
+
+  // Saída da conta usada para quitar cartão: sai do caixa, mas não volta a ser consumo.
+  const cardCredits = pluggyTransactions.filter(row => {
+    const account = pluggyAccountMap.get(row.pluggy_account_id);
+    return String(account?.type || '').toUpperCase() === 'CREDIT' && num(row.amount) < 0;
+  });
+  const usedCardCredits = new Set();
+
+  bankRows.forEach(row => {
+    if (String(row.transaction_type || '').toUpperCase() !== 'DEBIT') return;
+    if (pluggyInternalTransferIds.has(row.pluggy_transaction_id)) return;
+
+    const description = normalizeSearchText(`${row.description || ''} ${row.description_raw || ''}`);
+    const category = normalizeSearchText(row.category);
+    const explicitCardPayment = /(pagamento|pagto|pgto|pgt|gastos).*?(cartao|fatura)|(cartao|fatura).*?(pagamento|pagto|pgto|pgt)/i.test(description)
+      || category.includes('credit card payment');
+    const amount = Math.abs(num(row.amount));
+    const time = new Date(row.transaction_date).getTime();
+
+    let matched = null;
+    if (amount > 0 && Number.isFinite(time)) {
+      matched = cardCredits.find(other => {
+        if (usedCardCredits.has(other.pluggy_transaction_id)) return false;
+        const otherTime = new Date(other.transaction_date).getTime();
+        const otherDescription = normalizeSearchText(`${other.description || ''} ${other.description_raw || ''}`);
+        const otherCategory = normalizeSearchText(other.category);
+        const creditLooksLikePayment = /(pagamento|pagto|pgto|pgt|fatura)/i.test(otherDescription) || otherCategory.includes('credit card payment');
+        return Math.abs(Math.abs(num(other.amount)) - amount) < 0.01
+          && Math.abs(otherTime - time) <= 3 * 86400000
+          && (explicitCardPayment || creditLooksLikePayment);
+      });
+    }
+
+    if (explicitCardPayment || matched) pluggyNeutralBankIds.add(row.pluggy_transaction_id);
+    if (matched) {
+      pluggySuppressedIds.add(matched.pluggy_transaction_id);
+      usedCardCredits.add(matched.pluggy_transaction_id);
+    }
+  });
+}
+
+function normalizePluggyTransaction(row) {
+  const account = pluggyAccountMap.get(row.pluggy_account_id);
+  if (!account || pluggySuppressedIds.has(row.pluggy_transaction_id)) return null;
+
+  const signedAmount = num(row.amount);
+  const amount = Math.abs(signedAmount);
+  const accountType = String(account.type || '').toUpperCase();
+  const txType = String(row.transaction_type || '').toUpperCase();
+  const salary = accountType === 'BANK' && txType === 'CREDIT' && pluggyIsSalary(row);
+  let type = 'expense';
+
+  if (salary) {
+    type = 'income';
+  } else if (accountType === 'CREDIT') {
+    type = signedAmount > 0 ? 'card' : 'card_payment';
+  } else if (pluggyInternalTransferIds.has(row.pluggy_transaction_id)) {
+    type = 'transfer';
+  } else if (pluggyNeutralBankIds.has(row.pluggy_transaction_id)) {
+    type = 'card_payment';
+  } else {
+    type = txType === 'CREDIT' ? 'income' : 'expense';
+  }
+
+  const date = pluggyDateLocal(row.transaction_date);
+  const dueDate = simpleDate(row.bill_forecast_date) || date;
+  const status = String(row.status || '').toUpperCase() === 'POSTED' ? 'confirmed' : 'pending';
+  const defaultCategory = type === 'transfer'
+    ? 'Transferência interna'
+    : type === 'card_payment'
+      ? 'Pagamento de cartão'
+      : 'Sem categoria';
+  const category = salary ? 'Salário' : localizedCategory(row.category || defaultCategory);
+
+  return {
+    id: `pluggy:${row.pluggy_transaction_id}`,
+    pluggyId: row.pluggy_transaction_id,
+    description: row.description || row.description_raw || 'Movimentação Open Finance',
+    amount,
+    type,
+    date,
+    dueDate,
+    paidDate: '',
+    accountId: accountType === 'BANK' ? `pluggy-account:${row.pluggy_account_id}` : '',
+    destinationAccountId: '',
+    cardId: accountType === 'CREDIT' ? `pluggy-card:${row.pluggy_account_id}` : '',
+    category,
+    subcategory: '',
+    member: '',
+    tags: salary ? ['salário'] : [],
+    status,
+    paymentMethod: 'Open Finance',
+    installmentCurrent: row.installment_number || 1,
+    installmentTotal: row.total_installments || 1,
+    notes: '',
+    origin: 'openfinance',
+    sourceLabel: account.name || account.institution_name || 'Open Finance',
+    readOnly: true,
+    internalTransfer: type === 'transfer'
+  };
+}
+
+function cashFlowDate(tx) {
+  return tx.paidDate || tx.date || tx.dueDate || '';
+}
+
+function consumptionDate(tx) {
+  return tx.date || tx.dueDate || tx.paidDate || '';
+}
+
+function isAccountCashMovement(tx) {
+  if (!validForCalculations(tx) || tx.status !== 'confirmed') return false;
+  if (tx.type === 'transfer' || tx.type === 'card') return false;
+  if (!['income', 'expense', 'card_payment'].includes(tx.type)) return false;
+  return Boolean(tx.accountId);
+}
+
+function cashFlowTransactionsForMonth(key = ui.month) {
+  return allTransactions().filter(tx => isAccountCashMovement(tx) && isInMonth(cashFlowDate(tx), key));
+}
+
+function monthCashFlowTotals(key = ui.month) {
+  const rows = cashFlowTransactionsForMonth(key);
+  const income = rows.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const expense = rows.filter(tx => tx.type === 'expense' || tx.type === 'card_payment').reduce((sum, tx) => sum + num(tx.amount), 0);
+  return { income, expense, result: income - expense, count: rows.length };
+}
+
+function monthConsumptionTransactions(key = ui.month) {
+  return allTransactions().filter(tx => {
+    if (!validForCalculations(tx) || !isInMonth(consumptionDate(tx), key)) return false;
+    if (tx.type === 'expense') return tx.status === 'confirmed';
+    if (tx.type === 'card') return tx.status === 'confirmed' || tx.status === 'pending';
+    return false;
+  });
+}
+
+function monthConsumptionTotal(key = ui.month) {
+  return monthConsumptionTransactions(key).reduce((sum, tx) => sum + num(tx.amount), 0);
+}
+
+function monthPendingCardTotal(key = ui.month) {
+  return monthConsumptionTransactions(key)
+    .filter(tx => tx.type === 'card' && tx.status === 'pending')
+    .reduce((sum, tx) => sum + num(tx.amount), 0);
+}
+
+function monthPendingTransactions(key = ui.month) {
+  return allTransactions().filter(tx => {
+    if (!validForCalculations(tx) || tx.status !== 'pending') return false;
+    if (!['income', 'expense', 'card'].includes(tx.type)) return false;
+    const viewDate = tx.type === 'card' ? consumptionDate(tx) : transactionViewDate(tx);
+    return isInMonth(viewDate, key);
+  });
+}
+
+function totalBankCashBalance() {
+  const manual = state.accounts.reduce((sum, account) => sum + accountBalance(account.id), 0);
+  const imported = pluggyAccounts
+    .filter(account => String(account.type).toUpperCase() === 'BANK')
+    .reduce((sum, account) => sum + num(account.balance), 0);
+  return manual + imported;
+}
+
+function totalCreditDebt() {
+  const manual = state.cards.reduce((sum, card) => sum + cardInvoice(card.id), 0);
+  const imported = pluggyAccounts
+    .filter(account => String(account.type).toUpperCase() === 'CREDIT')
+    .reduce((sum, account) => sum + Math.max(0, num(account.balance)), 0);
+  return manual + imported;
+}
+
+function categoryTotals(key = ui.month) {
+  const map = new Map();
+  monthConsumptionTransactions(key).forEach(tx => {
+    const category = localizedCategory(tx.category);
+    map.set(category, (map.get(category) || 0) + num(tx.amount));
+  });
+  return [...map.entries()].map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
+}
+
+function budgetSpent(budget) {
+  return monthConsumptionTransactions(budget.month)
+    .filter(tx => localizedCategory(tx.category) === localizedCategory(budget.category))
+    .reduce((sum, tx) => sum + num(tx.amount), 0);
+}
+
+function periodCashFlowTransactions(range = reportRangeBounds()) {
+  return allTransactions().filter(tx => {
+    if (!isAccountCashMovement(tx)) return false;
+    const key = dateKey(cashFlowDate(tx));
+    return key && key >= range.start && key <= range.end;
+  });
+}
+
+function periodConsumptionTransactions(range = reportRangeBounds()) {
+  return allTransactions().filter(tx => {
+    if (!validForCalculations(tx)) return false;
+    const key = dateKey(consumptionDate(tx));
+    if (!key || key < range.start || key > range.end) return false;
+    if (tx.type === 'expense') return tx.status === 'confirmed';
+    if (tx.type === 'card') return tx.status === 'confirmed' || tx.status === 'pending';
+    return false;
+  });
+}
+
+function periodTotals(range = reportRangeBounds()) {
+  const rows = periodCashFlowTransactions(range);
+  const income = rows.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const expense = rows.filter(tx => tx.type === 'expense' || tx.type === 'card_payment').reduce((sum, tx) => sum + num(tx.amount), 0);
+  return { income, expense, result: income - expense, count: rows.length };
+}
+
+function periodCategoryTotals(range = reportRangeBounds()) {
+  const map = new Map();
+  periodConsumptionTransactions(range).forEach(tx => {
+    const category = localizedCategory(tx.category);
+    map.set(category, (map.get(category) || 0) + num(tx.amount));
+  });
+  return [...map.entries()].map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
+}
+
+function periodMonthlyResults(range = reportRangeBounds()) {
+  const grouped = new Map();
+  periodCashFlowTransactions(range).forEach(tx => {
+    const key = dateKey(cashFlowDate(tx)).slice(0, 7);
+    if (!key) return;
+    if (!grouped.has(key)) grouped.set(key, { income: 0, expense: 0 });
+    const bucket = grouped.get(key);
+    if (tx.type === 'income') bucket.income += num(tx.amount);
+    if (tx.type === 'expense' || tx.type === 'card_payment') bucket.expense += num(tx.amount);
+  });
+
+  const months = [];
+  let key = range.start.slice(0, 7);
+  const last = range.end.slice(0, 7);
+  let safety = 0;
+  while (key <= last && safety < 120) {
+    const bucket = grouped.get(key) || { income: 0, expense: 0 };
+    months.push({ key, ...bucket, result: bucket.income - bucket.expense });
+    key = shiftMonth(key, 1);
+    safety++;
+  }
+  return months;
+}
+
+function typeLabel(type) {
+  return {
+    income: 'Entrada em conta',
+    expense: 'Gasto em conta',
+    transfer: 'Transferência interna',
+    card: 'Compra no cartão',
+    card_payment: 'Liquidação de cartão'
+  }[type] || type;
+}
+
+function renderTransactionRow(tx, actions = false) {
+  const isPositive = tx.type === 'income';
+  const isTransfer = tx.type === 'transfer';
+  const date = transactionViewDate(tx);
+  const source = tx.origin === 'openfinance'
+    ? (tx.sourceLabel || 'Open Finance')
+    : (tx.type === 'card' ? nameById(state.cards, tx.cardId, 'Cartão') : nameById(state.accounts, tx.accountId, 'Sem conta'));
+  const installment = num(tx.installmentTotal) > 1 ? ` · ${tx.installmentCurrent}/${tx.installmentTotal}` : '';
+  const origin = tx.origin === 'openfinance' ? ' · Open Finance' : ' · Manual';
+  const subtitle = `${typeLabel(tx.type)} · ${esc(localizedCategory(tx.category))} · ${esc(source)}${installment}${origin}`;
+  const valueClass = isTransfer ? '' : isPositive ? 'positive' : 'negative';
+  const sign = isPositive ? '+' : isTransfer ? '' : '−';
+  const canEdit = actions && !tx.readOnly && tx.origin !== 'openfinance';
+  return `<div class="list-row transaction-row">
+    <div class="row-main transaction-main"><div class="avatar">${typeIcon(tx.type)}</div><div class="row-content"><div class="row-title">${esc(tx.description)}</div><div class="row-subtitle">${subtitle} · ${date ? shortDate.format(parseDate(date)) : 'Sem data'}</div></div></div>
+    <div class="row-actions transaction-actions"><div class="row-summary"><div class="row-value ${valueClass}">${sign}${money.format(tx.amount)}</div><span class="chip ${tx.status}">${tx.status === 'confirmed' ? 'Confirmada' : tx.status === 'pending' ? 'Pendente' : 'Ignorada'}</span></div>${canEdit ? `<button class="icon-button" data-action="edit-transaction" data-id="${tx.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-transaction" data-id="${tx.id}" aria-label="Excluir">×</button>` : ''}</div>
+  </div>`;
+}
+
+function renderDashboard() {
+  const cash = monthCashFlowTotals();
+  const previousCash = monthCashFlowTotals(shiftMonth(ui.month, -1));
+  const categories = categoryTotals().slice(0, 6);
+  const maxCategory = Math.max(1, ...categories.map(item => item.total));
+  const budgets = state.budgets.filter(item => item.month === ui.month).slice(0, 4);
+  const recent = monthTransactions().sort((a, b) => (transactionViewDate(b) || '').localeCompare(transactionViewDate(a) || '')).slice(0, 6);
+  const pendingRows = monthPendingTransactions();
+  const pending = pendingRows.reduce((sum, tx) => sum + num(tx.amount), 0);
+  const resultChange = previousCash.result ? ((cash.result - previousCash.result) / Math.abs(previousCash.result)) * 100 : 0;
+  const consumption = monthConsumptionTotal();
+  const pendingCard = monthPendingCardTotal();
+  const bankCash = totalBankCashBalance();
+  const investments = totalInvestmentBalance();
+  const cardDebt = totalCreditDebt();
+  const netWorth = totalNetWorth();
+  const gettingStarted = state.accounts.length === 0 && state.transactions.length === 0 && pluggyAccounts.length === 0 && pluggyInvestments.length === 0 ? `
+    <article class="card getting-started" style="margin-bottom:16px">
+      <div class="card-header"><div><h2 class="card-title">Comece por aqui</h2><p class="card-note">Cadastre contas manualmente ou conecte seu banco pelo Open Finance.</p></div></div>
+      <div class="toolbar"><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button><button class="button" data-action="add-account">+ Conta manual</button></div>
+    </article>` : '';
+
+  const content = `
+    ${gettingStarted}
+
+    <div class="dashboard-section-heading"><div><h2>Fluxo de caixa · ${esc(formatMonthShort(ui.month))}</h2><p>Somente dinheiro que efetivamente entrou ou saiu das contas. Investimentos e compras ainda no cartão não entram aqui.</p></div></div>
+    <section class="grid kpis">
+      ${kpi('Saldo em contas', money.format(bankCash), 'Sem investimentos e sem limite de crédito', bankCash >= 0 ? 'positive' : 'negative')}
+      ${kpi('Entradas no caixa', money.format(cash.income), 'Recebimentos efetivos no mês', 'positive')}
+      ${kpi('Saídas do caixa', money.format(cash.expense), 'Inclui liquidação de fatura; exclui transferências próprias', 'negative')}
+      ${kpi('Resultado de caixa', money.format(cash.result), `${resultChange >= 0 ? '+' : ''}${resultChange.toFixed(0)}% versus mês anterior`, cash.result >= 0 ? 'positive' : 'negative')}
+    </section>
+
+    <div class="dashboard-section-heading dashboard-section-spaced"><div><h2>Patrimônio</h2><p>Posição atual separada do fluxo mensal. Sua reserva de emergência permanece aqui.</p></div></div>
+    <section class="grid dashboard-wealth-kpis">
+      ${kpi('Patrimônio líquido', money.format(netWorth), 'Contas + investimentos − cartões', netWorth >= 0 ? 'positive' : 'negative')}
+      ${kpi('Investimentos / reserva', money.format(investments), `${pluggyInvestments.length} ativos fora do fluxo mensal`, 'positive')}
+      ${kpi('Cartões em aberto', money.format(cardDebt), 'Dívida atual; o pagamento não vira novo consumo', cardDebt > 0 ? 'negative' : '')}
+    </section>
+
+    <section class="grid two" style="margin-top:16px">
+      <article class="card">
+        <div class="card-header"><div><h2 class="card-title">Gastos por categoria</h2><p class="card-note">${money.format(consumption)} realizados no mês · ${money.format(pendingCard)} ainda pendentes no cartão</p></div><button class="button small" data-page="reports">Detalhar</button></div>
+        ${categories.length ? `<div class="chart">${categories.map(item => `<div class="chart-row"><div class="chart-label">${esc(item.category)}</div><div class="chart-track"><div class="chart-bar" style="width:${(item.total / maxCategory) * 100}%"></div></div><div class="chart-value">${money.format(item.total)}</div></div>`).join('')}</div>` : empty('Ainda não há gastos realizados neste mês.')}
+      </article>
+
+      <article class="card">
+        <div class="card-header"><div><h2 class="card-title">Orçamentos do mês</h2><p class="card-note">Compras pendentes do cartão já consomem o orçamento da categoria.</p></div><button class="button small" data-page="planning">Gerenciar</button></div>
+        ${budgets.length ? `<div class="stack">${budgets.map(renderBudgetProgress).join('')}</div>` : empty('Crie limites para acompanhar seus gastos.')}
+      </article>
+    </section>
+
+    <section class="grid two" style="margin-top:16px">
+      <article class="card">
+        <div class="card-header"><div><h2 class="card-title">Movimentações recentes</h2><p class="card-note">Conta, cartão e transferências permanecem visíveis separadamente.</p></div><button class="button small primary" data-action="add-transaction">+ Lançar</button></div>
+        ${recent.length ? recent.map(renderTransactionRow).join('') : empty('Nenhuma movimentação neste mês.')}
+      </article>
+      <article class="card">
+        <div class="card-header"><div><h2 class="card-title">Atenção</h2><p class="card-note">Pendências e limites</p></div></div>
+        <div class="stack">
+          <button class="list-row attention-link" data-action="show-pending-transactions"><div><div class="row-title">Transações pendentes</div><div class="row-subtitle">${pendingRows.length} registros · toque para visualizar</div></div><div class="row-value warning">${money.format(pending)}</div></button>
+          ${budgetAlerts().slice(0, 4).map(alert => `<div class="list-row"><div><div class="row-title">${esc(alert.title)}</div><div class="row-subtitle">${esc(alert.message)}</div></div><span class="chip ${alert.level}">${alert.percent.toFixed(0)}%</span></div>`).join('') || '<div class="list-row"><div><div class="row-title">Tudo sob controle</div><div class="row-subtitle">Nenhum orçamento próximo do limite.</div></div><span class="chip confirmed">OK</span></div>'}
+        </div>
+      </article>
+    </section>`;
+
+  return pageShell(content, `<button class="button primary" data-action="add-transaction"><span class="desktop-label">Nova movimentação</span><span>＋</span></button>`);
+}
+
+function openInfoModal(title, body) {
+  document.getElementById('modal-root').innerHTML = `<div class="modal-backdrop" data-action="close-modal"><section class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}" style="width:min(860px,100%)"><div class="modal-header"><h2 class="modal-title">${esc(title)}</h2><button class="icon-button" type="button" data-action="close-modal" aria-label="Fechar">×</button></div><div class="modal-body">${body}</div><div class="modal-footer"><button class="button primary" type="button" data-action="close-modal">Fechar</button></div></section></div>`;
+}
+
+function openReportCategoryDetails(category) {
+  const range = reportRangeBounds();
+  const rows = periodConsumptionTransactions(range)
+    .filter(tx => localizedCategory(tx.category) === category)
+    .sort((a, b) => (consumptionDate(b) || '').localeCompare(consumptionDate(a) || ''));
+  const total = rows.reduce((sum, tx) => sum + num(tx.amount), 0);
+  const pending = rows.filter(tx => tx.status === 'pending').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const body = `
+    <div class="category-detail-summary">
+      <div><span>Total da categoria</span><strong>${money.format(total)}</strong></div>
+      <div><span>Movimentações</span><strong>${rows.length}</strong></div>
+      <div><span>Pendente no cartão</span><strong>${money.format(pending)}</strong></div>
+      <div><span>Período</span><strong>${esc(reportRangeLabel(range))}</strong></div>
+    </div>
+    <div class="category-detail-list">${rows.length ? rows.map(tx => renderTransactionRow(tx)).join('') : empty('Nenhuma movimentação encontrada.')}</div>`;
+  openInfoModal(category, body);
+}
+
+function renderReports() {
+  const range = reportRangeBounds();
+  const periodLabel = reportRangeLabel(range);
+  const categories = periodCategoryTotals(range);
+  const totals = periodTotals(range);
+  const consumptionRows = periodConsumptionTransactions(range);
+  const consumption = consumptionRows.reduce((sum, tx) => sum + num(tx.amount), 0);
+  const pendingConsumption = consumptionRows.filter(tx => tx.type === 'card' && tx.status === 'pending').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const maxCategory = Math.max(1, ...categories.map(item => item.total));
+  const results = periodMonthlyResults(range);
+  const maxFlow = Math.max(1, ...results.flatMap(item => [item.income, item.expense]));
+  const reportTransactions = periodTransactions(range, true);
+  const ignored = allTransactions().filter(tx => {
+    const key = dateKey(transactionViewDate(tx));
+    return tx.status === 'ignored' && key && key >= range.start && key <= range.end;
+  }).length;
+  const pending = reportTransactions.filter(tx => tx.status === 'pending').length;
+  const uncategorized = consumptionRows.filter(tx => localizedCategory(tx.category) === 'Sem categoria').length;
+  const internalTransfers = reportTransactions.filter(tx => tx.type === 'transfer' || tx.type === 'card_payment').length;
+
+  const presets = [
+    ['1m', '1 mês'], ['3m', '3 meses'], ['6m', '6 meses'], ['12m', '12 meses'], ['all', 'Todo histórico'], ['custom', 'Personalizado']
+  ];
+
+  const customRange = ui.reportRange === 'custom' ? `
+    <div class="report-custom-range">
+      <div class="field"><label>Data inicial</label><input class="input" id="report-start" type="date" value="${esc(range.start)}"></div>
+      <div class="field"><label>Data final</label><input class="input" id="report-end" type="date" value="${esc(range.end)}"></div>
+    </div>` : '';
+
+  const content = `
+    <article class="card report-period-card">
+      <div class="card-header"><div><h2 class="card-title">Período do relatório</h2><p class="card-note">Fluxo de caixa e consumo são analisados separadamente. Transferências próprias ficam neutras.</p></div><span class="chip confirmed report-period-label">${esc(periodLabel)}</span></div>
+      <div class="report-period-presets">${presets.map(([value, label]) => `<button class="button small report-period-button ${ui.reportRange === value ? 'primary active' : ''}" data-action="report-period" data-period="${value}">${label}</button>`).join('')}</div>
+      ${customRange}
+    </article>
+
+    <section class="grid kpis report-kpis" style="margin-top:16px">
+      <article class="card"><div class="kpi-label">Entradas no caixa</div><div class="kpi-value positive">${money.format(totals.income)}</div><div class="kpi-meta">Recebimentos efetivos</div></article>
+      <article class="card"><div class="kpi-label">Saídas do caixa</div><div class="kpi-value negative">${money.format(totals.expense)}</div><div class="kpi-meta">Inclui liquidação de cartão</div></article>
+      <article class="card"><div class="kpi-label">Resultado de caixa</div><div class="kpi-value ${totals.result >= 0 ? 'positive' : 'negative'}">${money.format(totals.result)}</div><div class="kpi-meta">Entradas menos saídas</div></article>
+      <article class="card"><div class="kpi-label">Consumo no período</div><div class="kpi-value negative">${money.format(consumption)}</div><div class="kpi-meta">${money.format(pendingConsumption)} pendentes no cartão</div></article>
+    </section>
+
+    <section class="grid two" style="margin-top:16px">
+      <article class="card">
+        <div class="card-header"><div><h2 class="card-title">Distribuição dos gastos</h2><p class="card-note">Inclui compras pendentes do cartão. Clique em uma categoria para ver os detalhes.</p></div></div>
+        ${categories.length ? `<div class="chart">${categories.map(item => `<button class="chart-row chart-row-button" data-action="report-category-details" data-category="${esc(item.category)}"><div class="chart-label">${esc(item.category)}</div><div class="chart-track"><div class="chart-bar" style="width:${(item.total / maxCategory) * 100}%"></div></div><div class="chart-value">${money.format(item.total)}</div></button>`).join('')}</div>` : empty('Sem gastos realizados para analisar neste período.')}
+      </article>
+      <article class="card">
+        <div class="card-header"><div><h2 class="card-title">Qualidade dos dados</h2><p class="card-note">Itens do período que merecem revisão</p></div></div>
+        <div class="stack">
+          <div class="list-row"><span>Transações pendentes</span><strong class="${pending ? 'warning' : 'positive'}">${pending}</strong></div>
+          <div class="list-row"><span>Transações ignoradas</span><strong>${ignored}</strong></div>
+          <div class="list-row"><span>Sem categoria</span><strong class="${uncategorized ? 'warning' : 'positive'}">${uncategorized}</strong></div>
+          <div class="list-row"><span>Transferências / liquidações fora do consumo</span><strong>${internalTransfers}</strong></div>
+          <div class="list-row"><span>Registros no período</span><strong>${reportTransactions.length}</strong></div>
+        </div>
+      </article>
+    </section>
+
+    <article class="card" style="margin-top:16px">
+      <div class="card-header"><div><h2 class="card-title">Fluxo de caixa</h2><p class="card-note">Entradas e saídas efetivas das contas · ${esc(periodLabel)}</p></div></div>
+      <div class="chart report-flow-chart">${results.map(item => `<div class="chart-row"><div class="chart-label">${esc(formatMonthShort(item.key))}</div><div><div class="chart-track" title="Entradas"><div class="chart-bar" style="width:${(item.income / maxFlow) * 100}%"></div></div><div class="chart-track" title="Saídas" style="margin-top:5px"><div class="chart-bar" style="width:${(item.expense / maxFlow) * 100}%;background:var(--negative)"></div></div></div><div class="chart-value ${item.result >= 0 ? 'positive' : 'negative'}">${money.format(item.result)}</div></div>`).join('')}</div>
+    </article>
+
+    <article class="card" style="margin-top:16px">
+      <div class="card-header"><div><h2 class="card-title">Exportação</h2><p class="card-note">Exporte somente o período selecionado ou gere uma cópia completa.</p></div></div>
+      <div class="toolbar"><button class="button primary" data-action="export-report-csv">Exportar período em CSV</button><button class="button" data-action="export-csv">Exportar tudo em CSV</button><button class="button" data-action="backup-json">Baixar cópia JSON</button></div>
+    </article>`;
+
+  return pageShell(content);
+}
+
+
+function renderTransactions() {
+  const search = ui.transactionSearch.trim().toLowerCase();
+  const rows = allTransactions()
+    .filter(tx => {
+      const viewDate = tx.type === 'card' ? consumptionDate(tx) : transactionViewDate(tx);
+      return isInMonth(viewDate);
+    })
+    .filter(tx => ui.transactionType === 'all' || tx.type === ui.transactionType)
+    .filter(tx => ui.transactionStatus === 'all' || tx.status === ui.transactionStatus)
+    .filter(tx => !search || [tx.description, localizedCategory(tx.category), tx.subcategory, tx.member, ...(tx.tags || [])].join(' ').toLowerCase().includes(search))
+    .sort((a, b) => {
+      const ad = a.type === 'card' ? consumptionDate(a) : transactionViewDate(a);
+      const bd = b.type === 'card' ? consumptionDate(b) : transactionViewDate(b);
+      return (bd || '').localeCompare(ad || '');
+    });
+
+  const content = `
+    <article class="card transactions-card">
+      <div class="toolbar transaction-toolbar">
+        <input class="input search" id="transaction-search" placeholder="Buscar descrição, categoria, membro ou tag" value="${esc(ui.transactionSearch)}">
+        <select class="select filter-select" id="transaction-type-filter">
+          ${selectOptions([['all','Todas'],['income','Entradas em conta'],['expense','Gastos em conta'],['card','Compras no cartão'],['card_payment','Liquidações de cartão'],['transfer','Transferências internas']], ui.transactionType)}
+        </select>
+        <select class="select filter-select" id="transaction-status-filter">
+          ${selectOptions([['all','Todas as situações'],['confirmed','Confirmadas'],['pending','Pendentes'],['ignored','Ignoradas']], ui.transactionStatus)}
+        </select>
+        <button class="button primary" data-action="add-transaction">+ Nova</button>
+      </div>
+      <div>${rows.length ? rows.map(tx => renderTransactionRow(tx, true)).join('') : empty('Nenhuma movimentação encontrada com estes filtros.')}</div>
+    </article>`;
+
+  return pageShell(content, `<button class="button primary" data-action="add-transaction">＋ <span class="desktop-label">Nova</span></button>`);
+}
+
+// Ações de drill-down adicionadas na v1.7.0.
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+  const action = button.dataset.action;
+
+  if (action === 'show-pending-transactions') {
+    ui.page = 'transactions';
+    ui.transactionStatus = 'pending';
+    ui.transactionType = 'all';
+    ui.transactionSearch = '';
+    render();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+
+  if (action === 'report-category-details') {
+    openReportCategoryDetails(button.dataset.category || 'Sem categoria');
+  }
+});
 
 initializeApp();

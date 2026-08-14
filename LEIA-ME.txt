@@ -1,3 +1,27 @@
+MEU FINANCEIRO v1.7.0 — FLUXO DE CAIXA, CONSUMO E PATRIMÔNIO
+
+Revisão da lógica financeira do aplicativo:
+- Fluxo de caixa separado do patrimônio: investimentos não entram nas entradas/saídas mensais.
+- Saldo em contas mostra somente recursos bancários, sem investimentos e sem limite de crédito.
+- Patrimônio líquido continua considerando contas + investimentos - cartões em aberto.
+- Compras no cartão entram no consumo e nas categorias na data da compra, mesmo quando PENDING.
+- Pagamento de fatura entra como saída de caixa, mas não é contabilizado novamente como gasto/consumo.
+- Transferências entre contas próprias (PIX/TED/DOC pareados) permanecem neutras no fluxo e no consumo.
+- Regra pessoal: "TED CONTA SALARIO GABRIEL COUTO DE ABREU" é classificada como Salário / Entrada em conta.
+- O PIX Santander -> Bradesco pareado entre contas próprias permanece como transferência interna, inclusive quando usado para preparar o pagamento do cartão.
+- Categorias importadas da Pluggy passam a ser exibidas em português.
+- Na Visão geral, "Transações pendentes" é clicável e abre Movimentações já filtradas em Pendentes.
+- Gastos por categoria e orçamentos passam a considerar compras pendentes do cartão, evitando esperar o pagamento da fatura para enxergar o consumo.
+- Relatórios mostram Fluxo de caixa e Consumo separadamente.
+- Na distribuição dos gastos do Relatório, cada categoria é clicável e abre o detalhamento das movimentações do período.
+- Nenhuma alteração de SQL, Supabase, Pluggy ou Edge Functions é necessária.
+
+IMPORTANTE:
+O cheque especial/limite de crédito não é somado ao patrimônio nem ao saldo em contas. Ele continua sendo crédito disponível, não recurso próprio.
+
+ATUALIZAÇÃO NO GITHUB:
+Substitua app.js, index.html, styles.css, sw.js e LEIA-ME.txt e faça o commit.
+
 MEU FINANCEIRO v1.6.2 — ATUALIZAÇÃO BANCÁRIA TRANSPARENTE
 
 Principais mudanças:
