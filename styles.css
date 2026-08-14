@@ -524,3 +524,39 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .category-detail-summary { grid-template-columns: 1fr 1fr; gap: 8px; }
   .chart-row-button { grid-template-columns: 92px minmax(0, 1fr) auto; }
 }
+
+/* ===== v1.7.1 — saldo atual x variação mensal ===== */
+.kpi-action-card {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.kpi-action-card:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+.cash-balance-card { border-width: 2px; }
+.cash-variation-card {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  gap: 6px 18px;
+  align-items: center;
+}
+.cash-variation-value { font-size: 1.45rem; font-weight: 800; white-space: nowrap; }
+.cash-variation-explanation, .cash-variation-note { color: var(--muted); font-size: .9rem; }
+.cash-variation-note { grid-column: 1 / -1; }
+.cash-variation-card.cash-down .cash-variation-value { color: var(--warning, #a96800); }
+.cash-variation-card.cash-up .cash-variation-value { color: var(--positive); }
+.cash-detail-summary {
+  display:flex; justify-content:space-between; gap:16px; align-items:center;
+  padding:12px 0 16px; border-bottom:1px solid var(--border); margin-bottom:8px;
+}
+.cash-detail-summary strong { font-size:1.25rem; }
+.report-variation-card .warning { color: var(--warning, #a96800); }
+@media (max-width: 640px) {
+  .cash-variation-card { grid-template-columns: 1fr; }
+  .cash-variation-value { justify-self:start; }
+  .cash-variation-note { grid-column:auto; }
+}

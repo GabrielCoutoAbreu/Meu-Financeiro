@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 4;
-const RELEASE_VERSION = '1.7.0';
+const RELEASE_VERSION = '1.7.1';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
@@ -944,6 +944,21 @@ function renderAuth() {
   return `<main class="auth-shell"><section class="auth-card"><div class="auth-brand"><div class="brand-mark">R$</div><div><h1>Meu Financeiro</h1><p>Seus dados financeiros sincronizados entre dispositivos.</p></div></div>${message}<form id="signin-form" class="auth-form"><div class="field"><label>E-mail</label><input class="input" name="email" type="email" autocomplete="email" required></div><div class="field"><label>Senha</label><input class="input" name="password" type="password" autocomplete="current-password" required></div><button class="button primary auth-submit" type="submit">Entrar</button></form><div class="auth-actions"><button class="auth-link" type="button" data-action="auth-mode" data-mode="forgot">Esqueci minha senha</button><button class="auth-link" type="button" data-action="auth-mode" data-mode="signup">Criar conta</button></div><div class="auth-security">☁ Dados na nuvem + cópia local para uso offline.</div></section></main>`;
 }
 
+function openCashFlowDetails(kind) {
+  const cash = monthCashFlowBreakdown();
+  const config = {
+    income: { title: 'Entradas no caixa', rows: cash.rows.filter(tx => tx.type === 'income'), total: cash.income },
+    direct: { title: 'Gastos pagos diretamente pela conta', rows: cash.rows.filter(tx => tx.type === 'expense'), total: cash.directExpenses },
+    cards: { title: 'Faturas liquidadas', rows: cash.rows.filter(tx => tx.type === 'card_payment'), total: cash.cardPayments }
+  }[kind];
+  if (!config) return;
+  const rows = [...config.rows].sort((a, b) => (cashFlowDate(b) || '').localeCompare(cashFlowDate(a) || ''));
+  const body = `
+    <div class="cash-detail-summary"><span>${rows.length} movimentações</span><strong>${money.format(config.total)}</strong></div>
+    <div class="category-detail-list">${rows.length ? rows.map(tx => renderTransactionRow(tx)).join('') : empty('Nenhuma movimentação encontrada.')}</div>`;
+  openInfoModal(`${config.title} · ${formatMonthShort(ui.month)}`, body);
+}
+
 function renderDashboard() {
   const totals = monthTotals();
   const previous = monthTotals(shiftMonth(ui.month, -1));
@@ -1271,7 +1286,7 @@ function renderReports() {
 
     <article class="card" style="margin-top:16px">
       <div class="card-header"><div><h2 class="card-title">Entradas e saídas</h2><p class="card-note">Evolução mensal · ${esc(periodLabel)}</p></div></div>
-      <div class="chart report-flow-chart">${results.map(item => `<div class="chart-row"><div class="chart-label">${esc(formatMonthShort(item.key))}</div><div><div class="chart-track" title="Ganhos"><div class="chart-bar" style="width:${(item.income / maxFlow) * 100}%"></div></div><div class="chart-track" title="Gastos" style="margin-top:5px"><div class="chart-bar" style="width:${(item.expense / maxFlow) * 100}%;background:var(--negative)"></div></div></div><div class="chart-value ${item.result >= 0 ? 'positive' : 'negative'}">${money.format(item.result)}</div></div>`).join('')}</div>
+      <div class="chart report-flow-chart">${results.map(item => `<div class="chart-row"><div class="chart-label">${esc(formatMonthShort(item.key))}</div><div><div class="chart-track" title="Ganhos"><div class="chart-bar" style="width:${(item.income / maxFlow) * 100}%"></div></div><div class="chart-track" title="Gastos" style="margin-top:5px"><div class="chart-bar" style="width:${(item.expense / maxFlow) * 100}%;background:var(--negative)"></div></div></div><div class="chart-value ${item.result >= 0 ? 'positive' : 'warning'}">${item.result >= 0 ? '+' : '−'}${money.format(Math.abs(item.result))}</div></div>`).join('')}</div>
     </article>
 
     <article class="card" style="margin-top:16px">
@@ -2606,6 +2621,15 @@ function monthCashFlowTotals(key = ui.month) {
   return { income, expense, result: income - expense, count: rows.length };
 }
 
+function monthCashFlowBreakdown(key = ui.month) {
+  const rows = cashFlowTransactionsForMonth(key);
+  const income = rows.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const directExpenses = rows.filter(tx => tx.type === 'expense').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const cardPayments = rows.filter(tx => tx.type === 'card_payment').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const outflow = directExpenses + cardPayments;
+  return { rows, income, directExpenses, cardPayments, outflow, variation: income - outflow };
+}
+
 function monthConsumptionTransactions(key = ui.month) {
   return allTransactions().filter(tx => {
     if (!validForCalculations(tx) || !isInMonth(consumptionDate(tx), key)) return false;
@@ -2755,6 +2779,7 @@ function renderTransactionRow(tx, actions = false) {
 
 function renderDashboard() {
   const cash = monthCashFlowTotals();
+  const cashBreakdown = monthCashFlowBreakdown();
   const previousCash = monthCashFlowTotals(shiftMonth(ui.month, -1));
   const categories = categoryTotals().slice(0, 6);
   const maxCategory = Math.max(1, ...categories.map(item => item.total));
@@ -2778,13 +2803,18 @@ function renderDashboard() {
   const content = `
     ${gettingStarted}
 
-    <div class="dashboard-section-heading"><div><h2>Fluxo de caixa · ${esc(formatMonthShort(ui.month))}</h2><p>Somente dinheiro que efetivamente entrou ou saiu das contas. Investimentos e compras ainda no cartão não entram aqui.</p></div></div>
-    <section class="grid kpis">
-      ${kpi('Saldo em contas', money.format(bankCash), 'Sem investimentos e sem limite de crédito', bankCash >= 0 ? 'positive' : 'negative')}
-      ${kpi('Entradas no caixa', money.format(cash.income), 'Recebimentos efetivos no mês', 'positive')}
-      ${kpi('Saídas do caixa', money.format(cash.expense), 'Inclui liquidação de fatura; exclui transferências próprias', 'negative')}
-      ${kpi('Resultado de caixa', money.format(cash.result), `${resultChange >= 0 ? '+' : ''}${resultChange.toFixed(0)}% versus mês anterior`, cash.result >= 0 ? 'positive' : 'negative')}
+    <div class="dashboard-section-heading"><div><h2>Disponibilidade e caixa · ${esc(formatMonthShort(ui.month))}</h2><p>O saldo atual mostra quanto você tem nas contas hoje. A variação mensal mostra apenas quanto esse saldo aumentou ou diminuiu no período — não representa déficit.</p></div></div>
+    <section class="grid kpis dashboard-cash-kpis">
+      <article class="card cash-balance-card"><div class="kpi-label">Saldo disponível em contas</div><div class="kpi-value ${bankCash >= 0 ? 'positive' : 'negative'}">${money.format(bankCash)}</div><div class="kpi-meta">Saldo bancário atual · sem investimentos e sem limite de crédito</div></article>
+      <button class="card kpi-action-card" data-action="cash-details" data-kind="income"><div class="kpi-label">Entradas no caixa</div><div class="kpi-value positive">${money.format(cashBreakdown.income)}</div><div class="kpi-meta">Recebimentos efetivos · toque para detalhar</div></button>
+      <button class="card kpi-action-card" data-action="cash-details" data-kind="direct"><div class="kpi-label">Gastos pagos pela conta</div><div class="kpi-value negative">${money.format(cashBreakdown.directExpenses)}</div><div class="kpi-meta">PIX, débitos e pagamentos diretos · toque para detalhar</div></button>
+      <button class="card kpi-action-card" data-action="cash-details" data-kind="cards"><div class="kpi-label">Faturas liquidadas</div><div class="kpi-value">${money.format(cashBreakdown.cardPayments)}</div><div class="kpi-meta">Saída de caixa, mas não novo consumo · toque para detalhar</div></button>
     </section>
+    <article class="card cash-variation-card ${cashBreakdown.variation >= 0 ? 'cash-up' : 'cash-down'}">
+      <div><div class="kpi-label">Variação do saldo no período</div><div class="cash-variation-explanation">Entradas menos gastos pagos pela conta e faturas liquidadas.</div></div>
+      <div class="cash-variation-value">${cashBreakdown.variation >= 0 ? '+' : '−'}${money.format(Math.abs(cashBreakdown.variation))}</div>
+      <div class="cash-variation-note">${cashBreakdown.variation >= 0 ? 'Seu caixa aumentou neste mês.' : 'Seu caixa diminuiu neste mês. Isso não significa que sua conta esteja negativa.'}</div>
+    </article>
 
     <div class="dashboard-section-heading dashboard-section-spaced"><div><h2>Patrimônio</h2><p>Posição atual separada do fluxo mensal. Sua reserva de emergência permanece aqui.</p></div></div>
     <section class="grid dashboard-wealth-kpis">
@@ -2883,8 +2913,8 @@ function renderReports() {
 
     <section class="grid kpis report-kpis" style="margin-top:16px">
       <article class="card"><div class="kpi-label">Entradas no caixa</div><div class="kpi-value positive">${money.format(totals.income)}</div><div class="kpi-meta">Recebimentos efetivos</div></article>
-      <article class="card"><div class="kpi-label">Saídas do caixa</div><div class="kpi-value negative">${money.format(totals.expense)}</div><div class="kpi-meta">Inclui liquidação de cartão</div></article>
-      <article class="card"><div class="kpi-label">Resultado de caixa</div><div class="kpi-value ${totals.result >= 0 ? 'positive' : 'negative'}">${money.format(totals.result)}</div><div class="kpi-meta">Entradas menos saídas</div></article>
+      <article class="card"><div class="kpi-label">Saídas efetivas</div><div class="kpi-value negative">${money.format(totals.expense)}</div><div class="kpi-meta">Movimento bancário, incluindo faturas</div></article>
+      <article class="card report-variation-card"><div class="kpi-label">Variação do caixa</div><div class="kpi-value ${totals.result >= 0 ? 'positive' : 'warning'}">${totals.result >= 0 ? '+' : '−'}${money.format(Math.abs(totals.result))}</div><div class="kpi-meta">Variação no período; não representa saldo negativo</div></article>
       <article class="card"><div class="kpi-label">Consumo no período</div><div class="kpi-value negative">${money.format(consumption)}</div><div class="kpi-meta">${money.format(pendingConsumption)} pendentes no cartão</div></article>
     </section>
 
@@ -2906,8 +2936,8 @@ function renderReports() {
     </section>
 
     <article class="card" style="margin-top:16px">
-      <div class="card-header"><div><h2 class="card-title">Fluxo de caixa</h2><p class="card-note">Entradas e saídas efetivas das contas · ${esc(periodLabel)}</p></div></div>
-      <div class="chart report-flow-chart">${results.map(item => `<div class="chart-row"><div class="chart-label">${esc(formatMonthShort(item.key))}</div><div><div class="chart-track" title="Entradas"><div class="chart-bar" style="width:${(item.income / maxFlow) * 100}%"></div></div><div class="chart-track" title="Saídas" style="margin-top:5px"><div class="chart-bar" style="width:${(item.expense / maxFlow) * 100}%;background:var(--negative)"></div></div></div><div class="chart-value ${item.result >= 0 ? 'positive' : 'negative'}">${money.format(item.result)}</div></div>`).join('')}</div>
+      <div class="card-header"><div><h2 class="card-title">Movimentação do caixa</h2><p class="card-note">Entradas e saídas efetivas das contas. O valor à direita é a variação mensal, não o saldo da conta · ${esc(periodLabel)}</p></div></div>
+      <div class="chart report-flow-chart">${results.map(item => `<div class="chart-row"><div class="chart-label">${esc(formatMonthShort(item.key))}</div><div><div class="chart-track" title="Entradas"><div class="chart-bar" style="width:${(item.income / maxFlow) * 100}%"></div></div><div class="chart-track" title="Saídas" style="margin-top:5px"><div class="chart-bar" style="width:${(item.expense / maxFlow) * 100}%;background:var(--negative)"></div></div></div><div class="chart-value ${item.result >= 0 ? 'positive' : 'warning'}">${item.result >= 0 ? '+' : '−'}${money.format(Math.abs(item.result))}</div></div>`).join('')}</div>
     </article>
 
     <article class="card" style="margin-top:16px">
@@ -2958,6 +2988,11 @@ document.addEventListener('click', event => {
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const action = button.dataset.action;
+
+  if (action === 'cash-details') {
+    openCashFlowDetails(button.dataset.kind || 'income');
+    return;
+  }
 
   if (action === 'show-pending-transactions') {
     ui.page = 'transactions';

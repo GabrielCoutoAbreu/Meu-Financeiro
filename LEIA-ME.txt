@@ -1,4 +1,4 @@
-MEU FINANCEIRO v1.7.0 — FLUXO DE CAIXA, CONSUMO E PATRIMÔNIO
+MEU FINANCEIRO v1.7.1 — SALDO ATUAL, MOVIMENTAÇÃO DE CAIXA, CONSUMO E PATRIMÔNIO
 
 Revisão da lógica financeira do aplicativo:
 - Fluxo de caixa separado do patrimônio: investimentos não entram nas entradas/saídas mensais.
@@ -63,3 +63,11 @@ Atualização da tela Relatórios:
 
 Nenhuma alteração de banco de dados, Supabase, Pluggy ou Open Finance é necessária.
 Substitua app.js, index.html, styles.css, sw.js e LEIA-ME.txt no GitHub e faça o commit.
+
+
+AJUSTE v1.7.1
+- Saldo bancário atual passa a ser o indicador principal de disponibilidade.
+- Variação mensal negativa não é mais apresentada como déficit.
+- Saídas separadas em gastos pagos pela conta e faturas liquidadas.
+- Cards de entradas, gastos em conta e faturas são clicáveis para auditoria.
+- Relatórios passam a chamar o resultado de Variação do caixa.
