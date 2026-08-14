@@ -1,3 +1,19 @@
+MEU FINANCEIRO v1.6.2 — ATUALIZAÇÃO BANCÁRIA TRANSPARENTE
+
+Principais mudanças:
+- O botão Open Finance agora tenta primeiro disparar uma coleta bancária real pela Pluggy.
+- Para Items MeuPluggy, quando a API bloqueia a atualização direta, o aplicativo informa isso claramente.
+- Exibe a data da última coleta bancária retornada pela Pluggy, quando disponível.
+- Botão para abrir o MeuPluggy e atualizar Santander/Bradesco por lá.
+- Ao retornar ao Meu Financeiro, os dados são verificados/importados automaticamente.
+- Informa quantas novas movimentações apareceram após a atualização.
+- Se nenhuma nova movimentação estiver disponível, o aplicativo não afirma falsamente que o banco foi atualizado.
+- Mantém contas, cartões, investimentos, relatórios e transferências internas da versão anterior.
+
+REQUISITO:
+A Edge Function pluggy-refresh-items deve permanecer publicada no Supabase com Verify JWT habilitado.
+
+
 MEU FINANCEIRO v1.6.1 — TRANSFERÊNCIAS INTERNAS NEUTRAS
 
 Melhorias desta versão:

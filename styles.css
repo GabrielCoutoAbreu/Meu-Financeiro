@@ -353,3 +353,77 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .report-period-button { font-size: .8rem; padding-inline: 7px; }
   .report-kpis { grid-template-columns: 1fr 1fr !important; }
 }
+
+
+/* ===== Atualização bancária transparente — v1.6.2 ===== */
+.bank-sync-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: .72rem;
+  line-height: 1.35;
+}
+.open-finance-refresh-modal {
+  width: min(620px, 100%);
+}
+.open-finance-help {
+  border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+  border-radius: 14px;
+  padding: 14px;
+}
+.open-finance-help strong {
+  display: block;
+  line-height: 1.4;
+}
+.open-finance-help p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+  font-size: .86rem;
+}
+.refresh-status-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.refresh-status-row {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 12px;
+  padding: 11px 12px;
+}
+.refresh-status-row > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.refresh-status-row span,
+.refresh-status-row small {
+  color: var(--muted);
+  font-size: .76rem;
+}
+.open-finance-refresh-actions {
+  flex-wrap: wrap;
+}
+@media (max-width: 620px) {
+  .open-finance-refresh-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .open-finance-refresh-actions .button {
+    width: 100%;
+    min-height: 46px;
+  }
+  .refresh-status-row > div {
+    display: grid;
+    gap: 3px;
+  }
+  .pluggy-row .row-main {
+    min-width: 0;
+  }
+  .bank-sync-meta {
+    overflow-wrap: anywhere;
+  }
+}

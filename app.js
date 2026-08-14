@@ -2,15 +2,18 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 4;
-const RELEASE_VERSION = '1.6.1';
+const RELEASE_VERSION = '1.6.2';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
 const PLUGGY_TRANSACTIONS_TABLE = 'pluggy_transactions';
 const PLUGGY_INVESTMENTS_TABLE = 'pluggy_investments';
 const APP_URL = 'https://gabrielcoutoabreu.github.io/Meu-Financeiro/';
+const MEU_PLUGGY_URL = 'https://meu.pluggy.ai/';
+const OPEN_FINANCE_RETURN_KEY = 'mf-open-finance-awaiting-meupluggy';
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+const shortDateTime = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
 const MONTH_ABBR = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
 const NAV_ITEMS = [
@@ -40,7 +43,9 @@ let pluggyItemsLoading = false;
 let pluggyAccounts = [];
 let pluggyTransactions = [];
 let pluggyInvestments = [];
+let pluggyRemoteStatus = new Map();
 let pluggyDataLoading = false;
+let openFinanceReturnCheckRunning = false;
 let pluggyAccountMap = new Map();
 let pluggyNeutralBankIds = new Set();
 let pluggySuppressedIds = new Set();
@@ -1074,11 +1079,16 @@ function renderPluggyConnections() {
   if (pluggyItemsLoading) return `<div class="open-finance-empty"><span class="spinner-dot"></span> Carregando conexões bancárias…</div>`;
   if (!pluggyItems.length) return `<div class="open-finance-empty">Nenhum banco conectado ainda. Use <strong>Conectar banco</strong> para iniciar o Open Finance.</div>`;
   return `<div class="pluggy-list">${pluggyItems.map(item => {
-    const status = pluggyStatusLabel(item.status);
-    const updated = item.last_sync_at ? shortDate.format(new Date(item.last_sync_at)) : '';
+    const remote = pluggyRemoteStatus.get(item.item_id) || null;
+    const status = pluggyStatusLabel(remote?.status || item.status);
+    const appUpdated = item.last_sync_at ? shortDateTime.format(new Date(item.last_sync_at)) : '';
+    const bankUpdated = remote?.lastUpdatedAt ? shortDateTime.format(new Date(remote.lastUpdatedAt)) : '';
     const inferredInstitution = institutionForItem(item.item_id);
     const displayName = inferredInstitution && inferredInstitution !== 'MeuPluggy' ? inferredInstitution : (item.connector_name || 'Instituição conectada');
-    return `<div class="pluggy-row"><div class="row-main"><div class="bank-avatar">🏦</div><div><div class="row-title">${esc(displayName)}</div><div class="row-subtitle">MeuPluggy · ID ${esc(String(item.item_id || '').slice(0, 8))}${updated ? ` · ${esc(updated)}` : ''}</div></div></div><span class="chip ${status.tone}">${esc(status.label)}</span></div>`;
+    const syncDetail = bankUpdated
+      ? `Última coleta bancária: ${esc(bankUpdated)}`
+      : (appUpdated ? `Última importação no app: ${esc(appUpdated)}` : 'Aguardando primeira sincronização');
+    return `<div class="pluggy-row"><div class="row-main"><div class="bank-avatar">🏦</div><div><div class="row-title">${esc(displayName)}</div><div class="row-subtitle">MeuPluggy · ID ${esc(String(item.item_id || '').slice(0, 8))}</div><div class="bank-sync-meta">${syncDetail}</div></div></div><span class="chip ${status.tone}">${esc(status.label)}</span></div>`;
   }).join('')}</div>`;
 }
 
@@ -1142,7 +1152,7 @@ function renderPatrimony() {
 
   const content = `
     <section class="card open-finance-card">
-      <div class="card-header open-finance-header"><div><div class="open-finance-kicker">OPEN FINANCE · PLUGGY</div><h2 class="card-title">Bancos conectados</h2><p class="card-note">Saldos e movimentações vêm da Pluggy e ficam armazenados com segurança no Supabase.</p></div><div class="open-finance-actions"><button class="button" data-action="refresh-open-finance">↻ Atualizar dados</button><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button></div></div>
+      <div class="card-header open-finance-header"><div><div class="open-finance-kicker">OPEN FINANCE · PLUGGY</div><h2 class="card-title">Bancos conectados</h2><p class="card-note">O botão de atualização verifica primeiro se a instituição permite nova coleta e só depois importa os dados para o aplicativo.</p></div><div class="open-finance-actions"><button class="button" data-action="refresh-open-finance">↻ Atualizar bancos</button><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button></div></div>
       ${renderPluggyConnections()}
       ${financeSummary}
     </section>
@@ -1447,23 +1457,226 @@ async function loadOpenFinanceData({ quiet = false } = {}) {
   }
 }
 
-async function refreshOpenFinance({ quiet = false } = {}) {
-  if (!authSession?.user?.id) return showToast('Entre na sua conta antes de atualizar o Open Finance.', { tone: 'warning' });
-  if (!navigator.onLine) return showToast('É necessário estar conectado à internet para atualizar o Open Finance.', { tone: 'warning' });
 
-  const toast = quiet ? null : showToast('Atualizando contas e movimentações do Open Finance…', { tone: 'info', duration: 0 });
+function setPluggyRemoteStatus(items = []) {
+  if (!Array.isArray(items)) return;
+  for (const item of items) {
+    if (!item?.itemId) continue;
+    pluggyRemoteStatus.set(item.itemId, item);
+  }
+}
+
+async function loadPluggyRemoteStatus({ quiet = true } = {}) {
+  if (!authSession?.user?.id || !navigator.onLine || !supabaseClient || !pluggyItems.length) return null;
+  try {
+    const { data, error } = await supabaseClient.functions.invoke('pluggy-refresh-items', {
+      body: { action: 'status' }
+    });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    setPluggyRemoteStatus(data?.items || []);
+    if (ui.page === 'patrimony') render();
+    return data;
+  } catch (error) {
+    console.error('Falha ao consultar o estado bancário na Pluggy:', error?.message || error);
+    if (!quiet) showToast('Não foi possível consultar a data da última coleta bancária.', { tone: 'warning' });
+    return null;
+  }
+}
+
+function updateToastText(node, message, tone = 'info') {
+  if (!node?.isConnected) return null;
+  node.className = `toast toast-${tone}`;
+  node.textContent = message;
+  return node;
+}
+
+function openMeuPluggyRefreshDialog(refreshData = {}) {
+  const items = Array.isArray(refreshData?.items) ? refreshData.items : [];
+  const rows = items.map(item => {
+    const institution = institutionForItem(item.itemId) || item.connector || 'Instituição';
+    const last = item.lastUpdatedAt ? shortDateTime.format(new Date(item.lastUpdatedAt)) : 'não informada';
+    const reason = item.result === 'meupluggy_manual_only'
+      ? 'Atualização manual pelo MeuPluggy'
+      : item.result === 'frequency_limited'
+        ? 'Aguardar a frequência permitida'
+        : 'Atualização direta indisponível';
+    return `<div class="refresh-status-row"><div><strong>${esc(institution)}</strong><span>${esc(reason)}</span></div><small>Última coleta bancária: ${esc(last)}</small></div>`;
+  }).join('');
+
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" data-action="close-modal">
+      <section class="modal open-finance-refresh-modal" role="dialog" aria-modal="true" aria-label="Atualização bancária">
+        <div class="modal-header">
+          <h2 class="modal-title">Atualização bancária</h2>
+          <button class="icon-button" type="button" data-action="close-modal" aria-label="Fechar">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="open-finance-help">
+            <strong>O MeuPluggy não permite que o Meu Financeiro force uma nova coleta bancária pela API.</strong>
+            <p>Para buscar transações mais recentes, atualize Santander e Bradesco no MeuPluggy. Quando você voltar para este aplicativo, os dados serão verificados automaticamente.</p>
+            <p class="card-note">Mesmo após a atualização, transações de Open Finance regulado podem levar algum tempo para serem disponibilizadas pela instituição.</p>
+          </div>
+          <div class="refresh-status-list">${rows}</div>
+        </div>
+        <div class="modal-footer open-finance-refresh-actions">
+          <button class="button" type="button" data-action="verify-open-finance-now">Já atualizei · verificar agora</button>
+          <button class="button primary" type="button" data-action="open-meupluggy-refresh">Abrir MeuPluggy</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function pluggyRefreshFinished(items = []) {
+  if (!Array.isArray(items) || !items.length) return true;
+  return items.every(item => {
+    const status = String(item.status || '').toUpperCase();
+    const execution = String(item.executionStatus || '').toUpperCase();
+    return !['UPDATING', 'CREATED', 'LOGIN_IN_PROGRESS', 'LOGIN_MFA_IN_PROGRESS', 'WAITING_USER_INPUT'].includes(status)
+      && !['CREATED', 'LOGIN_IN_PROGRESS', 'LOGIN_MFA_IN_PROGRESS', 'WAITING_USER_INPUT'].includes(execution);
+  });
+}
+
+async function waitForPluggyRefresh(toast = null, attempts = 24) {
+  let last = null;
+  for (let i = 0; i < attempts; i++) {
+    await sleep(i === 0 ? 1800 : 3000);
+    const { data, error } = await supabaseClient.functions.invoke('pluggy-refresh-items', {
+      body: { action: 'status' }
+    });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    last = data;
+    setPluggyRemoteStatus(data?.items || []);
+    if (ui.page === 'patrimony') render();
+    if (pluggyRefreshFinished(data?.items || [])) return data;
+    updateToastText(toast, `Coleta bancária em andamento… tentativa ${i + 1}/${attempts}`, 'info');
+  }
+  return last;
+}
+
+async function importOpenFinanceOnly({ quiet = false, toast = null, afterExternalRefresh = false } = {}) {
+  if (!authSession?.user?.id) return null;
+
+  const beforeIds = new Set(pluggyTransactions.map(tx => tx.pluggy_transaction_id));
+
+  if (!toast && !quiet) {
+    toast = showToast(afterExternalRefresh ? 'Verificando novos dados do MeuPluggy…' : 'Importando dados disponíveis da Pluggy…', { tone: 'info', duration: 0 });
+  } else if (toast) {
+    updateToastText(toast, afterExternalRefresh ? 'Verificando novos dados do MeuPluggy…' : 'Importando dados disponíveis da Pluggy…', 'info');
+  }
+
   try {
     const { data, error } = await supabaseClient.functions.invoke('pluggy-import-data', { body: { days: 365 } });
     if (error) throw error;
     if (data?.error) throw new Error(data.error);
-    await Promise.all([loadOpenFinanceData({ quiet: true }), loadPluggyItems({ quiet: true })]);
-    const accounts = data?.accountsImported ?? pluggyAccounts.length;
-    const transactions = data?.transactionsImported ?? pluggyTransactions.length;
-    const investments = data?.investmentsImported ?? pluggyInvestments.length;
-    if (!quiet) finishToast(toast, `Open Finance atualizado: ${accounts} contas/cartões, ${investments} investimentos e ${Number(transactions).toLocaleString('pt-BR')} movimentações verificadas.`, 'success', 4600);
+
+    await Promise.all([
+      loadOpenFinanceData({ quiet: true }),
+      loadPluggyItems({ quiet: true })
+    ]);
+    await loadPluggyRemoteStatus({ quiet: true });
+
+    const newTransactions = pluggyTransactions.filter(tx => !beforeIds.has(tx.pluggy_transaction_id)).length;
+    const totalNow = pluggyTransactions.length;
+    const accounts = pluggyAccounts.length;
+    const investments = pluggyInvestments.length;
+
+    try { localStorage.removeItem(OPEN_FINANCE_RETURN_KEY); } catch {}
+
+    if (!quiet) {
+      if (newTransactions > 0) {
+        finishToast(toast, `Atualização concluída: ${newTransactions.toLocaleString('pt-BR')} nova${newTransactions === 1 ? '' : 's'} movimentação${newTransactions === 1 ? '' : 'ões'}. Total: ${totalNow.toLocaleString('pt-BR')}.`, 'success', 5200);
+      } else {
+        const suffix = afterExternalRefresh
+          ? ' Nenhuma nova movimentação foi disponibilizada ainda.'
+          : '';
+        finishToast(toast, `Dados verificados: ${accounts} contas/cartões, ${investments} investimentos e ${totalNow.toLocaleString('pt-BR')} movimentações.${suffix}`, afterExternalRefresh ? 'warning' : 'success', 5200);
+      }
+    }
+
+    return {
+      success: true,
+      newTransactions,
+      totalTransactions: totalNow,
+      data
+    };
+  } catch (error) {
+    console.error('Falha ao importar dados Open Finance:', error?.message || error);
+    if (!quiet) finishToast(toast, 'Não foi possível importar os dados Open Finance agora.', 'error', 4400);
+    return { success: false, error };
+  }
+}
+
+async function refreshOpenFinance({ quiet = false, importOnly = false, afterExternalRefresh = false } = {}) {
+  if (!authSession?.user?.id) return showToast('Entre na sua conta antes de atualizar o Open Finance.', { tone: 'warning' });
+  if (!navigator.onLine) return showToast('É necessário estar conectado à internet para atualizar o Open Finance.', { tone: 'warning' });
+
+  if (importOnly) {
+    return importOpenFinanceOnly({ quiet, afterExternalRefresh });
+  }
+
+  const toast = quiet ? null : showToast('Verificando se os bancos permitem uma nova coleta…', { tone: 'info', duration: 0 });
+
+  try {
+    const { data: refreshData, error: refreshError } = await supabaseClient.functions.invoke('pluggy-refresh-items', {
+      body: { action: 'refresh' }
+    });
+
+    if (refreshError) throw refreshError;
+    if (refreshData?.error) throw new Error(refreshData.error);
+
+    setPluggyRemoteStatus(refreshData?.items || []);
+    if (ui.page === 'patrimony') render();
+
+    const items = Array.isArray(refreshData?.items) ? refreshData.items : [];
+    const started = Number(refreshData?.triggered || 0);
+    const alreadyUpdating = Number(refreshData?.alreadyUpdating || 0);
+    const blocked = Number(refreshData?.blocked || 0);
+
+    if (started > 0 || alreadyUpdating > 0) {
+      updateToastText(toast, `Coleta bancária iniciada em ${started + alreadyUpdating} conexão${started + alreadyUpdating === 1 ? '' : 'ões'}…`, 'info');
+      await waitForPluggyRefresh(toast);
+      return importOpenFinanceOnly({ quiet, toast });
+    }
+
+    const requiresMeuPluggy = items.length > 0 && items.every(item =>
+      ['meupluggy_manual_only', 'not_allowed', 'frequency_limited', 'rejected'].includes(item.result)
+    );
+
+    if (blocked > 0 && requiresMeuPluggy) {
+      if (!quiet) {
+        finishToast(toast, 'A coleta direta não é permitida para o MeuPluggy. Atualize os bancos no MeuPluggy.', 'warning', 3900);
+        openMeuPluggyRefreshDialog(refreshData);
+      }
+      return { success: false, requiresMeuPluggy: true, refreshData };
+    }
+
+    return importOpenFinanceOnly({ quiet, toast });
+
   } catch (error) {
     console.error('Falha ao atualizar Open Finance:', error?.message || error);
-    if (!quiet) finishToast(toast, 'Não foi possível atualizar o Open Finance agora.', 'error', 4200);
+    if (!quiet) finishToast(toast, 'Não foi possível verificar a atualização bancária agora.', 'error', 4400);
+    return { success: false, error };
+  }
+}
+
+async function verifyAfterMeuPluggyReturn({ automatic = false } = {}) {
+  if (openFinanceReturnCheckRunning || !authSession?.user?.id || !navigator.onLine) return;
+  let pending = false;
+  try { pending = Boolean(localStorage.getItem(OPEN_FINANCE_RETURN_KEY)); } catch {}
+  if (!pending && automatic) return;
+
+  openFinanceReturnCheckRunning = true;
+  try {
+    await sleep(automatic ? 1400 : 0);
+    await refreshOpenFinance({ importOnly: true, afterExternalRefresh: true });
+  } finally {
+    openFinanceReturnCheckRunning = false;
   }
 }
 
@@ -1840,6 +2053,7 @@ async function activateSession(session) {
   render();
   await initialCloudSync();
   await Promise.all([loadPluggyItems({ quiet: true }), loadOpenFinanceData({ quiet: true })]);
+  await loadPluggyRemoteStatus({ quiet: true });
   startSyncPolling();
 }
 
@@ -1854,6 +2068,7 @@ async function logoutCurrentDevice() {
   pluggyAccounts = [];
   pluggyTransactions = [];
   pluggyInvestments = [];
+  pluggyRemoteStatus = new Map();
   rebuildOpenFinanceIndexes();
   syncMeta = { status: 'local', pending: false, lastSyncedAt: '', lastRemoteUpdatedAt: '', remoteVersion: 0, message: '' };
   ui.page = 'dashboard';
@@ -1874,7 +2089,7 @@ function stopSyncPolling() {
 
 document.addEventListener('click', event => {
   const pageButton = event.target.closest('[data-page]');
-  if (pageButton) { ui.page = pageButton.dataset.page; render(); if (ui.page === 'patrimony') Promise.all([loadPluggyItems({ quiet: true }), loadOpenFinanceData({ quiet: true })]); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  if (pageButton) { ui.page = pageButton.dataset.page; render(); if (ui.page === 'patrimony') Promise.all([loadPluggyItems({ quiet: true }), loadOpenFinanceData({ quiet: true })]).then(() => loadPluggyRemoteStatus({ quiet: true })); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const action = button.dataset.action;
@@ -1883,6 +2098,18 @@ document.addEventListener('click', event => {
   if (action === 'sync-now') { manualSync(); return; }
   if (action === 'connect-bank') { connectBankWithPluggy(); return; }
   if (action === 'refresh-open-finance') { refreshOpenFinance(); return; }
+  if (action === 'open-meupluggy-refresh') {
+    try { localStorage.setItem(OPEN_FINANCE_RETURN_KEY, new Date().toISOString()); } catch {}
+    closeModal();
+    showToast('Atualize Santander e Bradesco no MeuPluggy. Ao retornar, o Meu Financeiro verificará os dados automaticamente.', { tone: 'info', duration: 5200 });
+    window.open(MEU_PLUGGY_URL, '_blank', 'noopener');
+    return;
+  }
+  if (action === 'verify-open-finance-now') {
+    closeModal();
+    verifyAfterMeuPluggyReturn({ automatic: false });
+    return;
+  }
   if (action === 'force-cloud') { pushStateToCloud({ force: true }).then(() => render()); return; }
   if (action === 'force-pull') {
     if (syncMeta.pending && !window.confirm('Usar a versão da nuvem? Alterações ainda não sincronizadas deste dispositivo serão substituídas.')) return;
@@ -1986,7 +2213,9 @@ window.addEventListener('offline', () => {
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && authSession && navigator.onLine && !syncMeta.pending) pullStateFromCloud({ quiet: true });
+  if (document.visibilityState !== 'visible' || !authSession || !navigator.onLine) return;
+  if (!syncMeta.pending) pullStateFromCloud({ quiet: true });
+  verifyAfterMeuPluggyReturn({ automatic: true });
 });
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
@@ -2022,6 +2251,7 @@ async function initializeApp() {
           pluggyAccounts = [];
           pluggyTransactions = [];
           pluggyInvestments = [];
+          pluggyRemoteStatus = new Map();
           rebuildOpenFinanceIndexes();
           render();
           return;
