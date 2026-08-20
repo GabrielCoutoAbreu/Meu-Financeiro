@@ -1,8 +1,8 @@
 'use strict';
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
-const APP_VERSION = 6;
-const RELEASE_VERSION = '2.0.0';
+const APP_VERSION = 7;
+const RELEASE_VERSION = '2.1.0';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
@@ -4573,5 +4573,776 @@ document.addEventListener('input', event => {
     try { input.setSelectionRange(cursor, cursor); } catch {}
   }
 });
+
+
+
+// ==========================================================
+// Meu Financeiro v2.1.0 — Inteligência, Confiabilidade e Patrimônio 360°
+// ==========================================================
+// Esta versão preserva todas as regras financeiras da v2.0 e acrescenta:
+// - Central de Inteligência com alertas transparentes e dispensáveis;
+// - Saúde do Open Finance por instituição;
+// - Verificações de consistência e anomalias potenciais (sem alterar dados);
+// - Snapshots patrimoniais reais, gravados ao longo do uso;
+// - Análise de composição patrimonial e investimentos;
+// - Indicador de saúde financeira com critérios explicáveis.
+
+if (!NAV_ITEMS.some(item => item[0] === 'intelligence')) {
+  NAV_ITEMS.splice(Math.max(0, NAV_ITEMS.length - 1), 0, ['intelligence', '✦', 'Inteligência']);
+}
+PAGE_META.intelligence = ['Inteligência', 'Alertas, confiabilidade do Open Finance, patrimônio e investimentos em uma única visão.'];
+
+const V21_DEFAULT_ALERT_PREFERENCES = {
+  overdue: true,
+  budget: true,
+  cardLimit: true,
+  bankStale: true,
+  uncategorized: true,
+  unusual: true,
+  projection: true
+};
+
+const _v21DefaultStateV20 = defaultState;
+defaultState = function() {
+  const base = _v21DefaultStateV20();
+  return {
+    ...base,
+    patrimonySnapshots: [],
+    alertPreferences: { ...V21_DEFAULT_ALERT_PREFERENCES },
+    dismissedAlerts: []
+  };
+};
+
+const _v21NormalizeStateV20 = normalizeState;
+normalizeState = function(data) {
+  const normalized = _v21NormalizeStateV20(data || {});
+  normalized.version = APP_VERSION;
+  normalized.patrimonySnapshots = Array.isArray(data?.patrimonySnapshots) ? data.patrimonySnapshots : [];
+  normalized.alertPreferences = { ...V21_DEFAULT_ALERT_PREFERENCES, ...(data?.alertPreferences || {}) };
+  normalized.dismissedAlerts = Array.isArray(data?.dismissedAlerts) ? data.dismissedAlerts : [];
+  return normalized;
+};
+
+function v21EnsureState() {
+  if (!Array.isArray(state.patrimonySnapshots)) state.patrimonySnapshots = [];
+  if (!state.alertPreferences || typeof state.alertPreferences !== 'object') state.alertPreferences = { ...V21_DEFAULT_ALERT_PREFERENCES };
+  state.alertPreferences = { ...V21_DEFAULT_ALERT_PREFERENCES, ...state.alertPreferences };
+  if (!Array.isArray(state.dismissedAlerts)) state.dismissedAlerts = [];
+}
+
+function v21CurrentCreditDebt() {
+  const currentMonth = monthKey(new Date());
+  const manual = state.cards.reduce((sum, card) => sum + cardInvoice(card.id, currentMonth), 0);
+  const imported = pluggyAccounts
+    .filter(account => String(account.type || '').toUpperCase() === 'CREDIT')
+    .reduce((sum, account) => sum + Math.max(0, num(account.balance)), 0);
+  return manual + imported;
+}
+
+function v21CurrentSnapshot() {
+  const bankCash = totalBankCashBalance();
+  const investments = totalInvestmentBalance();
+  const cardDebt = v21CurrentCreditDebt();
+  return {
+    date: isoDate(),
+    capturedAt: new Date().toISOString(),
+    bankCash,
+    investments,
+    cardDebt,
+    netWorth: bankCash + investments - cardDebt,
+    bankAccounts: pluggyAccounts.filter(account => String(account.type || '').toUpperCase() === 'BANK').length + state.accounts.length,
+    cards: pluggyAccounts.filter(account => String(account.type || '').toUpperCase() === 'CREDIT').length + state.cards.length,
+    investmentCount: pluggyInvestments.length
+  };
+}
+
+function v21SnapshotChanged(a, b) {
+  if (!a || !b) return true;
+  const keys = ['bankCash', 'investments', 'cardDebt', 'netWorth'];
+  return keys.some(key => Math.abs(num(a[key]) - num(b[key])) >= 0.01)
+    || num(a.bankAccounts) !== num(b.bankAccounts)
+    || num(a.cards) !== num(b.cards)
+    || num(a.investmentCount) !== num(b.investmentCount);
+}
+
+function v21RecordPatrimonySnapshot() {
+  v21EnsureState();
+  const snapshot = v21CurrentSnapshot();
+  const index = state.patrimonySnapshots.findIndex(item => item?.date === snapshot.date);
+  let changed = false;
+  if (index >= 0) {
+    if (v21SnapshotChanged(state.patrimonySnapshots[index], snapshot)) {
+      state.patrimonySnapshots[index] = snapshot;
+      changed = true;
+    }
+  } else {
+    state.patrimonySnapshots.push(snapshot);
+    changed = true;
+  }
+  if (state.patrimonySnapshots.length > 730) {
+    state.patrimonySnapshots = state.patrimonySnapshots
+      .filter(item => item?.date)
+      .sort((a,b) => String(a.date).localeCompare(String(b.date)))
+      .slice(-730);
+    changed = true;
+  }
+  return changed;
+}
+
+const _v21PersistV20 = persist;
+persist = function(options = {}) {
+  v21EnsureState();
+  v21RecordPatrimonySnapshot();
+  return _v21PersistV20(options);
+};
+
+const _v21LoadOpenFinanceDataV20 = loadOpenFinanceData;
+loadOpenFinanceData = async function(options = {}) {
+  const result = await _v21LoadOpenFinanceDataV20(options);
+  v21EnsureState();
+  const changed = v21RecordPatrimonySnapshot();
+  if (changed && authSession?.user?.id) _v21PersistV20();
+  if (changed && ['intelligence', 'patrimony'].includes(ui.page)) render();
+  return result;
+};
+
+const _v21LoadPluggyRemoteStatusV20 = loadPluggyRemoteStatus;
+loadPluggyRemoteStatus = async function(options = {}) {
+  const result = await _v21LoadPluggyRemoteStatusV20(options);
+  if (ui.page === 'intelligence') render();
+  return result;
+};
+
+function v21DateTime(value) {
+  if (!value) return 'Não informado';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : shortDateTime.format(date);
+}
+
+function v21HoursSince(value) {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return null;
+  return Math.max(0, (Date.now() - time) / 3600000);
+}
+
+function v21FreshnessText(hours) {
+  if (hours == null) return 'sem horário disponível';
+  if (hours < 1) return 'há menos de 1 hora';
+  if (hours < 24) return `há ${Math.round(hours)} h`;
+  const days = Math.floor(hours / 24);
+  return `há ${days} dia${days === 1 ? '' : 's'}`;
+}
+
+function v21CurrentProjection() {
+  const originalMonth = ui.month;
+  try {
+    ui.month = monthKey(new Date());
+    return financialProjection();
+  } finally {
+    ui.month = originalMonth;
+  }
+}
+
+function v21IsoMax(values = []) {
+  const valid = values.filter(Boolean).filter(value => Number.isFinite(new Date(value).getTime()));
+  if (!valid.length) return '';
+  return valid.sort((a,b) => new Date(b).getTime() - new Date(a).getTime())[0];
+}
+
+function v21OpenFinanceHealth() {
+  const accountsByItem = new Map();
+  pluggyAccounts.forEach(account => {
+    const key = account.pluggy_item_id || '';
+    if (!accountsByItem.has(key)) accountsByItem.set(key, []);
+    accountsByItem.get(key).push(account);
+  });
+  const investmentsByItem = new Map();
+  pluggyInvestments.forEach(investment => {
+    const key = investment.pluggy_item_id || '';
+    if (!investmentsByItem.has(key)) investmentsByItem.set(key, []);
+    investmentsByItem.get(key).push(investment);
+  });
+  const accountItemMap = new Map(pluggyAccounts.map(account => [account.pluggy_account_id, account.pluggy_item_id]));
+  const transactionsByItem = new Map();
+  pluggyTransactions.forEach(tx => {
+    const key = accountItemMap.get(tx.pluggy_account_id) || '';
+    if (!transactionsByItem.has(key)) transactionsByItem.set(key, []);
+    transactionsByItem.get(key).push(tx);
+  });
+
+  return pluggyItems.map(item => {
+    const itemId = item.item_id;
+    const remote = pluggyRemoteStatus.get(itemId) || {};
+    const accounts = accountsByItem.get(itemId) || [];
+    const investments = investmentsByItem.get(itemId) || [];
+    const transactions = transactionsByItem.get(itemId) || [];
+    const latestImport = v21IsoMax([
+      item.last_sync_at,
+      ...accounts.map(row => row.synced_at),
+      ...investments.map(row => row.synced_at),
+      ...transactions.slice(0, 100).map(row => row.synced_at)
+    ]);
+    const bankUpdated = remote.lastUpdatedAt || '';
+    const reference = bankUpdated || latestImport;
+    const hours = v21HoursSince(reference);
+    const statusText = `${remote.status || ''} ${remote.executionStatus || ''} ${remote.error?.message || remote.statusDetail || ''}`.toUpperCase();
+    let level = 'good';
+    let label = 'Atualizado';
+    if (/ERROR|FAILED|LOGIN_ERROR|ACCOUNT_NEEDS_ACTION|USER_ACTION/.test(statusText)) {
+      level = 'error'; label = 'Atenção';
+    } else if (hours == null) {
+      level = 'unknown'; label = 'Sem histórico';
+    } else if (hours > 72) {
+      level = 'error'; label = 'Desatualizado';
+    } else if (hours > 36) {
+      level = 'warning'; label = 'Verificar';
+    }
+    const lastTx = transactions
+      .map(tx => tx.transaction_date)
+      .filter(Boolean)
+      .sort((a,b) => new Date(b).getTime() - new Date(a).getTime())[0] || '';
+    return {
+      itemId,
+      institution: institutionForItem(itemId) || item.connector_name || 'Instituição',
+      level,
+      label,
+      hours,
+      bankUpdated,
+      latestImport,
+      lastTx,
+      accounts: accounts.length,
+      cards: accounts.filter(account => String(account.type || '').toUpperCase() === 'CREDIT').length,
+      investments: investments.length,
+      transactions: transactions.length,
+      remoteStatus: remote.status || item.status || '',
+      executionStatus: remote.executionStatus || ''
+    };
+  });
+}
+
+function v21Median(values) {
+  const sorted = values.map(num).filter(value => value > 0).sort((a,b) => a-b);
+  if (!sorted.length) return 0;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function v21UncategorizedRows(days = 90) {
+  const cutoff = shiftDateDays(isoDate(), -days);
+  return openFinanceTransactions().filter(tx => {
+    if (!['expense', 'card'].includes(tx.type) || !validForCalculations(tx)) return false;
+    const key = dateKey(consumptionDate(tx));
+    return key && key >= cutoff && localizedCategory(tx.category || 'Sem categoria') === 'Sem categoria';
+  });
+}
+
+function v21PotentialDuplicateGroups(days = 120) {
+  const cutoff = shiftDateDays(isoDate(), -days);
+  const groups = new Map();
+  pluggyTransactions.forEach(row => {
+    const day = dateKey(row.transaction_date);
+    if (!day || day < cutoff) return;
+    const desc = normalizeSearchText(row.description || row.description_raw || '').replace(/\s+/g, ' ').trim();
+    if (!desc || Math.abs(num(row.amount)) < 0.01) return;
+    const signature = `${row.pluggy_account_id}|${day}|${Math.abs(num(row.amount)).toFixed(2)}|${desc}`;
+    if (!groups.has(signature)) groups.set(signature, []);
+    groups.get(signature).push(row);
+  });
+  return [...groups.values()]
+    .filter(group => new Set(group.map(row => row.pluggy_transaction_id)).size > 1)
+    .sort((a,b) => b.length - a.length)
+    .slice(0, 12);
+}
+
+function v21UnmatchedCardPayments(days = 90) {
+  const cutoff = shiftDateDays(isoDate(), -days);
+  const rawCardCredits = pluggyTransactions.filter(row => {
+    const account = pluggyAccountMap.get(row.pluggy_account_id);
+    return String(account?.type || '').toUpperCase() === 'CREDIT' && num(row.amount) < 0;
+  });
+  return openFinanceTransactions().filter(tx => {
+    if (tx.type !== 'card_payment' || !String(tx.accountId || '').startsWith('pluggy-account:')) return false;
+    const day = dateKey(cashFlowDate(tx));
+    if (!day || day < cutoff) return false;
+    const time = parseDate(day)?.getTime();
+    if (!Number.isFinite(time)) return false;
+    return !rawCardCredits.some(row => {
+      const other = new Date(row.transaction_date).getTime();
+      return Math.abs(Math.abs(num(row.amount)) - num(tx.amount)) < 0.01
+        && Number.isFinite(other)
+        && Math.abs(other - time) <= 3 * 86400000;
+    });
+  });
+}
+
+function v21UnusualConsumption(days = 60) {
+  const cutoff = shiftDateDays(isoDate(), -days);
+  const rows = allTransactions().filter(tx => {
+    if (!['expense', 'card'].includes(tx.type) || !validForCalculations(tx)) return false;
+    if (tx.type === 'expense' && tx.status !== 'confirmed') return false;
+    if (tx.type === 'card' && !['confirmed', 'pending'].includes(tx.status)) return false;
+    const key = dateKey(consumptionDate(tx));
+    return key && key >= cutoff;
+  });
+  const byCategory = new Map();
+  rows.forEach(tx => {
+    const category = localizedCategory(tx.category || 'Sem categoria');
+    if (!byCategory.has(category)) byCategory.set(category, []);
+    byCategory.get(category).push(tx);
+  });
+  const unusual = [];
+  byCategory.forEach((items, category) => {
+    if (items.length < 5) return;
+    const median = v21Median(items.map(item => item.amount));
+    if (!median) return;
+    items.forEach(tx => {
+      const threshold = Math.max(500, median * 4);
+      if (num(tx.amount) >= threshold) unusual.push({ tx, category, median, threshold });
+    });
+  });
+  return unusual.sort((a,b) => num(b.tx.amount) - num(a.tx.amount)).slice(0, 12);
+}
+
+function v21Anomalies() {
+  const health = v21OpenFinanceHealth();
+  const uncategorized = v21UncategorizedRows();
+  const duplicates = v21PotentialDuplicateGroups();
+  const unmatchedCard = v21UnmatchedCardPayments();
+  const unusual = v21UnusualConsumption();
+  const anomalies = [];
+
+  health.filter(item => ['warning', 'error'].includes(item.level)).forEach(item => anomalies.push({
+    id: `bank-${item.itemId}`,
+    severity: item.level,
+    type: 'bank',
+    title: `${item.institution}: coleta precisa de atenção`,
+    description: item.hours == null ? 'Não há data confiável de coleta/importação.' : `Última referência ${v21FreshnessText(item.hours)}.`,
+    count: 1
+  }));
+  if (uncategorized.length) anomalies.push({
+    id: 'uncategorized', severity: 'warning', type: 'category', title: 'Movimentações sem categoria',
+    description: `${uncategorized.length} movimentação${uncategorized.length === 1 ? '' : 'ões'} Open Finance dos últimos 90 dias ainda sem categoria.`, count: uncategorized.length
+  });
+  if (duplicates.length) anomalies.push({
+    id: 'duplicates', severity: 'warning', type: 'duplicate', title: 'Possíveis lançamentos duplicados',
+    description: `${duplicates.length} grupo${duplicates.length === 1 ? '' : 's'} com mesma conta, data, valor e descrição. Verifique antes de qualquer correção.`, count: duplicates.length
+  });
+  if (unmatchedCard.length) anomalies.push({
+    id: 'card-unmatched', severity: 'unknown', type: 'card', title: 'Liquidações sem correspondência identificada',
+    description: `${unmatchedCard.length} pagamento${unmatchedCard.length === 1 ? '' : 's'} de cartão não encontrou contrapartida de cartão na janela de ±3 dias. Isso pode ser normal para cartões externos.`, count: unmatchedCard.length
+  });
+  if (unusual.length) anomalies.push({
+    id: 'unusual', severity: 'unknown', type: 'unusual', title: 'Gastos fora do padrão recente',
+    description: `${unusual.length} gasto${unusual.length === 1 ? '' : 's'} ficou acima de 4× a mediana da própria categoria. É apenas um sinal de revisão, não um erro.`, count: unusual.length
+  });
+  return { anomalies, health, uncategorized, duplicates, unmatchedCard, unusual };
+}
+
+function v21CardUtilizationAlerts() {
+  return pluggyAccounts
+    .filter(account => String(account.type || '').toUpperCase() === 'CREDIT')
+    .map(account => {
+      const balance = Math.max(0, num(account.balance));
+      const available = account.available_credit_limit == null ? null : Math.max(0, num(account.available_credit_limit));
+      const limit = available == null ? null : balance + available;
+      const percent = limit ? (balance / limit) * 100 : null;
+      return { account, balance, available, limit, percent };
+    })
+    .filter(item => item.percent != null && item.percent >= 80)
+    .sort((a,b) => b.percent - a.percent);
+}
+
+function v21DismissedSet() {
+  v21EnsureState();
+  return new Set(state.dismissedAlerts.map(item => typeof item === 'string' ? item : item?.id).filter(Boolean));
+}
+
+function v21Alerts({ includeDismissed = false } = {}) {
+  v21EnsureState();
+  const prefs = state.alertPreferences;
+  const alerts = [];
+  const today = isoDate();
+  const currentMonth = monthKey(new Date());
+
+  if (prefs.overdue) {
+    const overdue = state.scheduledTransactions.filter(item => item.status === 'pending' && dateKey(item.dueDate) && dateKey(item.dueDate) < today);
+    if (overdue.length) {
+      const total = overdue.reduce((sum, item) => sum + num(item.amount), 0);
+      alerts.push({ id: `overdue-${today}`, severity: 'error', icon: '!', title: `${overdue.length} compromisso${overdue.length === 1 ? '' : 's'} vencido${overdue.length === 1 ? '' : 's'}`, description: `${money.format(total)} aguardando baixa na Agenda.`, action: 'planning' });
+    }
+  }
+
+  if (prefs.budget) {
+    const currentBudgets = state.budgets.filter(item => item.month === currentMonth);
+    currentBudgets.forEach(budget => {
+      const spent = budgetSpent(budget);
+      const percent = num(budget.limit) ? (spent / num(budget.limit)) * 100 : 0;
+      if (percent >= Math.min(80, num(budget.alertAt) || 80)) alerts.push({
+        id: `budget-${currentMonth}-${budget.id || budget.category}`,
+        severity: percent >= 100 ? 'error' : 'warning', icon: '◎',
+        title: `${budget.category}: ${percent.toFixed(0)}% do orçamento`,
+        description: `${money.format(spent)} de ${money.format(budget.limit)} utilizados.`, action: 'planning'
+      });
+    });
+  }
+
+  if (prefs.cardLimit) {
+    v21CardUtilizationAlerts().forEach(item => alerts.push({
+      id: `card-limit-${currentMonth}-${item.account.pluggy_account_id}`,
+      severity: item.percent >= 95 ? 'error' : 'warning', icon: '▰',
+      title: `${item.account.name || 'Cartão'} em ${item.percent.toFixed(0)}% do limite`,
+      description: `Em aberto ${money.format(item.balance)}${item.available != null ? ` · disponível ${money.format(item.available)}` : ''}.`, action: 'patrimony'
+    }));
+  }
+
+  if (prefs.bankStale) {
+    v21OpenFinanceHealth().filter(item => ['warning','error'].includes(item.level)).forEach(item => alerts.push({
+      id: `bank-stale-${today}-${item.itemId}`, severity: item.level, icon: '🏦',
+      title: `${item.institution} precisa ser atualizado`,
+      description: item.hours == null ? 'Sem horário confiável de atualização.' : `Última referência ${v21FreshnessText(item.hours)}.`, action: 'intelligence'
+    }));
+  }
+
+  if (prefs.uncategorized) {
+    const uncategorized = v21UncategorizedRows(30);
+    if (uncategorized.length) alerts.push({
+      id: `uncategorized-${currentMonth}`, severity: 'warning', icon: '?',
+      title: `${uncategorized.length} movimentação${uncategorized.length === 1 ? '' : 'ões'} sem categoria`,
+      description: 'Revise para melhorar orçamentos e relatórios.', action: 'review'
+    });
+  }
+
+  if (prefs.unusual) {
+    const unusual = v21UnusualConsumption(45);
+    if (unusual.length) alerts.push({
+      id: `unusual-${currentMonth}`, severity: 'unknown', icon: '↗',
+      title: `${unusual.length} gasto${unusual.length === 1 ? '' : 's'} fora do padrão`,
+      description: 'Valores acima de 4× a mediana recente da categoria. Confira se fazem sentido.', action: 'intelligence'
+    });
+  }
+
+  if (prefs.projection) {
+    const projection = v21CurrentProjection();
+    if (projection.available && projection.projected < 0) alerts.push({
+      id: `projection-${currentMonth}`, severity: 'error', icon: '◌',
+      title: 'Saldo projetado negativo',
+      description: `A projeção até ${formatDateBr(projection.end)} está em ${money.format(projection.projected)}.`, action: 'planning'
+    });
+  }
+
+  const dismissed = v21DismissedSet();
+  return (includeDismissed ? alerts : alerts.filter(alert => !dismissed.has(alert.id)))
+    .sort((a,b) => ({error:0, warning:1, unknown:2, good:3}[a.severity] ?? 9) - ({error:0, warning:1, unknown:2, good:3}[b.severity] ?? 9));
+}
+
+function v21CategorizationQuality() {
+  const cutoff = shiftDateDays(isoDate(), -60);
+  const rows = allTransactions().filter(tx => {
+    if (!['expense','card'].includes(tx.type) || !validForCalculations(tx)) return false;
+    const day = dateKey(consumptionDate(tx));
+    return day && day >= cutoff;
+  });
+  if (!rows.length) return { percent: 100, total: 0, uncategorized: 0 };
+  const uncategorized = rows.filter(tx => localizedCategory(tx.category || 'Sem categoria') === 'Sem categoria').length;
+  return { percent: Math.max(0, ((rows.length - uncategorized) / rows.length) * 100), total: rows.length, uncategorized };
+}
+
+function v21HealthScore() {
+  const bankHealth = v21OpenFinanceHealth();
+  let dataScore = 30;
+  if (bankHealth.length) {
+    const values = bankHealth.map(item => item.level === 'good' ? 30 : item.level === 'unknown' ? 18 : item.level === 'warning' ? 15 : 5);
+    dataScore = values.reduce((sum, value) => sum + value, 0) / values.length;
+  }
+
+  const categoryQuality = v21CategorizationQuality();
+  const categoryScore = 20 * (categoryQuality.percent / 100);
+
+  const currentMonth = monthKey(new Date());
+  const hasBudget = state.budgets.some(item => item.month === currentMonth);
+  const hasAgenda = state.scheduledTransactions.some(item => item.status === 'pending' && dateKey(item.dueDate) >= monthStart(currentMonth));
+  const planningScore = (hasBudget ? 10 : 0) + (hasAgenda ? 10 : 0);
+
+  const projection = v21CurrentProjection();
+  let liquidityScore = 15;
+  if (totalBankCashBalance() < 0) liquidityScore = 0;
+  else if (projection.available && projection.projected < 0) liquidityScore = 5;
+
+  const cardAlerts = v21CardUtilizationAlerts();
+  let cardScore = 15;
+  if (cardAlerts.some(item => item.percent >= 95)) cardScore = 3;
+  else if (cardAlerts.some(item => item.percent >= 80)) cardScore = 8;
+
+  const score = Math.round(clamp(dataScore + categoryScore + planningScore + liquidityScore + cardScore, 0, 100));
+  return {
+    score,
+    parts: [
+      { label: 'Confiabilidade dos dados', score: dataScore, max: 30 },
+      { label: 'Categorização', score: categoryScore, max: 20 },
+      { label: 'Planejamento', score: planningScore, max: 20 },
+      { label: 'Liquidez projetada', score: liquidityScore, max: 15 },
+      { label: 'Uso dos cartões', score: cardScore, max: 15 }
+    ],
+    categoryQuality,
+    projection
+  };
+}
+
+function v21ScoreLabel(score) {
+  if (score >= 85) return 'Muito boa';
+  if (score >= 70) return 'Boa';
+  if (score >= 50) return 'Atenção';
+  return 'Precisa de revisão';
+}
+
+function v21MonthlySnapshots() {
+  v21EnsureState();
+  const sorted = state.patrimonySnapshots
+    .filter(item => item?.date)
+    .slice()
+    .sort((a,b) => String(a.date).localeCompare(String(b.date)));
+  const map = new Map();
+  sorted.forEach(item => map.set(String(item.date).slice(0,7), item));
+  return [...map.values()].slice(-12);
+}
+
+function v21InvestmentAnalytics() {
+  const active = pluggyInvestments.filter(item => !['TOTAL_WITHDRAWAL','MATURED','INACTIVE'].includes(String(item.status || '').toUpperCase()));
+  const total = active.reduce((sum, item) => sum + Math.max(0, num(item.balance)), 0);
+  const original = active.reduce((sum, item) => sum + Math.max(0, num(item.amount_original)), 0);
+  const profitRows = active.filter(item => item.amount_profit != null && Number.isFinite(num(item.amount_profit)));
+  const profit = profitRows.reduce((sum, item) => sum + num(item.amount_profit), 0);
+  const withdrawalRows = active.filter(item => item.amount_withdrawal != null);
+  const withdrawal = withdrawalRows.reduce((sum, item) => sum + Math.max(0, num(item.amount_withdrawal)), 0);
+  const byType = new Map();
+  const byInstitution = new Map();
+  active.forEach(item => {
+    const value = Math.max(0, num(item.balance));
+    const type = investmentTypeLabel(item.type || item.subtype || 'OTHER');
+    const institution = institutionForItem(item.pluggy_item_id);
+    byType.set(type, (byType.get(type) || 0) + value);
+    byInstitution.set(institution, (byInstitution.get(institution) || 0) + value);
+  });
+  const today = isoDate();
+  const horizon = shiftDateDays(today, 180);
+  const maturities = active.filter(item => {
+    const due = simpleDate(item.due_date);
+    return due && due >= today && due <= horizon;
+  }).sort((a,b) => simpleDate(a.due_date).localeCompare(simpleDate(b.due_date)));
+  return {
+    active,
+    total,
+    original,
+    profit,
+    profitAvailable: profitRows.length > 0,
+    withdrawal,
+    withdrawalAvailable: withdrawalRows.length > 0,
+    returnPercent: original > 0 && profitRows.length ? (profit / original) * 100 : null,
+    byType: [...byType.entries()].map(([label,value]) => ({label,value})).sort((a,b) => b.value-a.value),
+    byInstitution: [...byInstitution.entries()].map(([label,value]) => ({label,value})).sort((a,b) => b.value-a.value),
+    maturities
+  };
+}
+
+function v21SeverityChip(level) {
+  if (level === 'good') return 'confirmed';
+  if (level === 'warning') return 'pending';
+  if (level === 'error') return 'v21-error-chip';
+  return 'ignored';
+}
+
+function v21RenderAlerts(alerts = v21Alerts()) {
+  if (!alerts.length) return `<div class="v21-empty-good"><span>✓</span><div><strong>Nenhum alerta prioritário</strong><p>Os critérios habilitados não encontraram pendências importantes agora.</p></div></div>`;
+  return `<div class="v21-alert-list">${alerts.map(alert => `<article class="v21-alert-row ${alert.severity}">
+    <span class="v21-alert-icon">${esc(alert.icon || '!')}</span>
+    <div class="v21-alert-main"><strong>${esc(alert.title)}</strong><small>${esc(alert.description)}</small></div>
+    <div class="v21-alert-actions">${alert.action === 'review' ? `<button class="button small" data-action="open-review-center">Revisar</button>` : alert.action ? `<button class="button small" data-page="${esc(alert.action)}">Abrir</button>` : ''}<button class="icon-button v21-dismiss" data-action="v21-dismiss-alert" data-alert-id="${esc(alert.id)}" aria-label="Dispensar alerta">×</button></div>
+  </article>`).join('')}</div>`;
+}
+
+function v21DashboardBanner() {
+  const alerts = v21Alerts().slice(0, 3);
+  const score = v21HealthScore();
+  if (!alerts.length && score.score >= 85) return `<button class="v21-dashboard-health compact good" data-page="intelligence"><span>✦</span><div><strong>Saúde financeira ${score.score}/100</strong><small>Nenhum alerta prioritário · ver detalhes</small></div><b>›</b></button>`;
+  return `<button class="v21-dashboard-health ${alerts.some(item => item.severity === 'error') ? 'attention' : ''}" data-page="intelligence"><span>✦</span><div><strong>Saúde financeira ${score.score}/100 · ${v21ScoreLabel(score.score)}</strong><small>${alerts.length ? `${alerts.length} alerta${alerts.length === 1 ? '' : 's'} prioritário${alerts.length === 1 ? '' : 's'} · toque para revisar` : 'Veja os critérios e a evolução do patrimônio'}</small></div><b>›</b></button>`;
+}
+
+function v21PatrimonyStrip() {
+  const snapshot = v21CurrentSnapshot();
+  const investment = v21InvestmentAnalytics();
+  return `<section class="v21-patrimony-strip">
+    <div><span>Patrimônio líquido</span><strong class="${snapshot.netWorth >= 0 ? 'positive' : 'negative'}">${money.format(snapshot.netWorth)}</strong></div>
+    <div><span>Disponível em contas</span><strong>${money.format(snapshot.bankCash)}</strong></div>
+    <div><span>Investimentos</span><strong>${money.format(snapshot.investments)}</strong></div>
+    <div><span>Cartões em aberto</span><strong>${money.format(snapshot.cardDebt)}</strong></div>
+    <button class="button small" data-page="intelligence">Patrimônio 360°</button>
+  </section>`;
+}
+
+function v21RenderOpenFinanceHealth(health) {
+  if (!health.length) return empty('Nenhuma conexão Open Finance cadastrada.');
+  return `<div class="v21-bank-health-list">${health.map(item => `<article class="v21-bank-health-row">
+    <span class="v21-health-dot ${item.level}"></span>
+    <div class="v21-bank-main"><strong>${esc(item.institution)}</strong><small>${item.accounts} conta${item.accounts === 1 ? '' : 's'} · ${item.cards} cartão${item.cards === 1 ? '' : 'ões'} · ${item.transactions} transações</small><small>Coleta: ${item.bankUpdated ? `${v21DateTime(item.bankUpdated)} (${v21FreshnessText(v21HoursSince(item.bankUpdated))})` : 'não informada'}</small><small>Importação: ${item.latestImport ? v21DateTime(item.latestImport) : 'não informada'}${item.lastTx ? ` · última transação ${formatDateBr(dateKey(item.lastTx))}` : ''}</small></div>
+    <span class="chip ${v21SeverityChip(item.level)}">${esc(item.label)}</span>
+  </article>`).join('')}</div>`;
+}
+
+function v21RenderAnomalies(bundle) {
+  if (!bundle.anomalies.length) return `<div class="v21-empty-good"><span>✓</span><div><strong>Nenhum sinal de inconsistência</strong><p>As verificações automáticas não encontraram padrões que mereçam revisão.</p></div></div>`;
+  return `<div class="v21-anomaly-list">${bundle.anomalies.map(item => `<article class="v21-anomaly-row"><span class="v21-health-dot ${item.severity}"></span><div><strong>${esc(item.title)}</strong><small>${esc(item.description)}</small></div><span class="chip ${v21SeverityChip(item.severity)}">${item.count}</span></article>`).join('')}</div>
+    <p class="v21-disclaimer">Estas verificações são heurísticas. “Possível duplicidade” ou “fora do padrão” não significa erro; nenhuma movimentação é alterada automaticamente.</p>`;
+}
+
+function v21RenderPatrimonyEvolution() {
+  const snapshots = v21MonthlySnapshots();
+  if (!snapshots.length) return empty('O histórico patrimonial começa a ser registrado na v2.1.0.');
+  const values = snapshots.map(item => num(item.netWorth));
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 1);
+  const span = Math.max(1, max - min);
+  return `<div class="v21-wealth-chart">${snapshots.map(item => {
+    const pct = clamp(((num(item.netWorth) - min) / span) * 100, 4, 100);
+    return `<div class="v21-wealth-row"><span>${esc(formatMonthShort(item.date.slice(0,7)))}</span><div class="v21-wealth-track"><i style="width:${pct}%"></i></div><strong class="${num(item.netWorth) >= 0 ? 'positive' : 'negative'}">${money.format(item.netWorth)}</strong></div>`;
+  }).join('')}</div><p class="v21-disclaimer">Snapshots usam saldos reais disponíveis no momento da sincronização. O histórico não é retroativo antes da v2.1.0.</p>`;
+}
+
+function v21RenderAllocation(snapshot) {
+  const assets = Math.max(0, snapshot.bankCash) + Math.max(0, snapshot.investments);
+  const cashPct = assets ? Math.max(0, snapshot.bankCash) / assets * 100 : 0;
+  const invPct = assets ? Math.max(0, snapshot.investments) / assets * 100 : 0;
+  const debtRatio = assets ? snapshot.cardDebt / assets * 100 : 0;
+  return `<div class="v21-allocation">
+    <div class="v21-allocation-total"><span>Ativos</span><strong>${money.format(assets)}</strong><small>Dívida de cartões: ${money.format(snapshot.cardDebt)} (${debtRatio.toFixed(1)}% dos ativos)</small></div>
+    <div class="v21-allocation-bars"><div><span>Contas</span><div class="progress"><span style="width:${clamp(cashPct,0,100)}%"></span></div><strong>${cashPct.toFixed(1)}%</strong></div><div><span>Investimentos</span><div class="progress"><span style="width:${clamp(invPct,0,100)}%"></span></div><strong>${invPct.toFixed(1)}%</strong></div></div>
+  </div>`;
+}
+
+function v21RenderInvestmentAnalysis(analytics) {
+  if (!analytics.active.length) return empty('Nenhum investimento ativo importado pelo Open Finance.');
+  const maxType = Math.max(1, ...analytics.byType.map(item => item.value));
+  const maturityRows = analytics.maturities.slice(0, 8).map(item => `<div class="v21-maturity-row"><div><strong>${esc(item.name || investmentTypeLabel(item.type))}</strong><small>${esc(institutionForItem(item.pluggy_item_id))}</small></div><span>${formatDateBr(simpleDate(item.due_date))}</span><strong>${money.format(item.balance)}</strong></div>`).join('');
+  return `<section class="grid kpis v21-investment-kpis">
+      <article class="card"><div class="kpi-label">Investido</div><div class="kpi-value positive">${money.format(analytics.total)}</div><div class="kpi-meta">${analytics.active.length} ativo${analytics.active.length === 1 ? '' : 's'} em posição</div></article>
+      <article class="card"><div class="kpi-label">Valor aplicado</div><div class="kpi-value">${analytics.original ? money.format(analytics.original) : '—'}</div><div class="kpi-meta">Quando informado pelas instituições</div></article>
+      <article class="card"><div class="kpi-label">Resultado informado</div><div class="kpi-value ${analytics.profit >= 0 ? 'positive' : 'negative'}">${analytics.profitAvailable ? money.format(analytics.profit) : '—'}</div><div class="kpi-meta">${analytics.returnPercent != null ? `${analytics.returnPercent >= 0 ? '+' : ''}${analytics.returnPercent.toFixed(2)}% sobre valor aplicado` : 'Rentabilidade não disponível para todos os ativos'}</div></article>
+      <article class="card"><div class="kpi-label">Disponível p/ resgate</div><div class="kpi-value">${analytics.withdrawalAvailable ? money.format(analytics.withdrawal) : '—'}</div><div class="kpi-meta">Campo informado pela Pluggy quando disponível</div></article>
+    </section>
+    <section class="grid two" style="margin-top:16px"><article class="card"><div class="card-header"><div><h3 class="card-title">Alocação por tipo</h3><p class="card-note">Distribuição da posição atual</p></div></div><div class="chart">${analytics.byType.map(item => `<div class="chart-row"><div class="chart-label">${esc(item.label)}</div><div class="chart-track"><div class="chart-bar" style="width:${(item.value/maxType)*100}%"></div></div><div class="chart-value">${money.format(item.value)}</div></div>`).join('')}</div></article><article class="card"><div class="card-header"><div><h3 class="card-title">Vencimentos em 180 dias</h3><p class="card-note">Somente ativos com vencimento informado</p></div></div>${maturityRows ? `<div class="v21-maturity-list">${maturityRows}</div>` : empty('Nenhum vencimento informado nos próximos 180 dias.')}</article></section>`;
+}
+
+function renderIntelligence() {
+  v21EnsureState();
+  v21RecordPatrimonySnapshot();
+  const score = v21HealthScore();
+  const alerts = v21Alerts();
+  const anomalyBundle = v21Anomalies();
+  const snapshot = v21CurrentSnapshot();
+  const investment = v21InvestmentAnalytics();
+  const scoreTone = score.score >= 85 ? 'good' : score.score >= 70 ? 'ok' : score.score >= 50 ? 'warning' : 'error';
+  const parts = score.parts.map(part => `<div class="v21-score-part"><div><span>${esc(part.label)}</span><strong>${Math.round(part.score)}/${part.max}</strong></div><div class="progress"><span style="width:${clamp((part.score/part.max)*100,0,100)}%"></span></div></div>`).join('');
+  const activePrefs = Object.entries(state.alertPreferences).map(([key, enabled]) => {
+    const labels = { overdue:'Contas vencidas', budget:'Orçamentos', cardLimit:'Uso do limite', bankStale:'Open Finance desatualizado', uncategorized:'Sem categoria', unusual:'Gastos fora do padrão', projection:'Saldo projetado' };
+    return `<label class="v21-pref"><input type="checkbox" data-v21-alert-pref="${esc(key)}" ${enabled ? 'checked' : ''}><span>${esc(labels[key] || key)}</span></label>`;
+  }).join('');
+
+  const content = `<section class="v21-hero card"><div class="v21-hero-score ${scoreTone}"><div class="v21-score-ring"><strong>${score.score}</strong><span>/100</span></div><div><small>Indicador de saúde financeira</small><h2>${esc(v21ScoreLabel(score.score))}</h2><p>É um indicador explicável, não uma nota de crédito. Usa qualidade dos dados, categorização, planejamento, liquidez projetada e uso dos cartões.</p></div></div><div class="v21-score-parts">${parts}</div></section>
+
+    <section class="grid kpis v21-top-kpis" style="margin-top:16px"><article class="card"><div class="kpi-label">Patrimônio líquido</div><div class="kpi-value ${snapshot.netWorth >= 0 ? 'positive' : 'negative'}">${money.format(snapshot.netWorth)}</div><div class="kpi-meta">Contas + investimentos − cartões</div></article><article class="card"><div class="kpi-label">Saldo disponível</div><div class="kpi-value ${snapshot.bankCash >= 0 ? 'positive' : 'negative'}">${money.format(snapshot.bankCash)}</div><div class="kpi-meta">Somente recursos bancários</div></article><article class="card"><div class="kpi-label">Alertas ativos</div><div class="kpi-value ${alerts.some(item => item.severity === 'error') ? 'negative' : alerts.length ? 'warning' : 'positive'}">${alerts.length}</div><div class="kpi-meta">Critérios habilitados por você</div></article><article class="card"><div class="kpi-label">Dados categorizados</div><div class="kpi-value">${score.categoryQuality.percent.toFixed(0)}%</div><div class="kpi-meta">Últimos 60 dias · ${score.categoryQuality.total} registros</div></article></section>
+
+    <section class="grid two" style="margin-top:16px"><article class="card"><div class="card-header"><div><h2 class="card-title">Alertas inteligentes</h2><p class="card-note">Somente sinais financeiros acionáveis; você pode dispensar cada alerta.</p></div><button class="button small" data-action="v21-restore-alerts">Restaurar dispensados</button></div>${v21RenderAlerts(alerts)}<details class="v21-alert-settings"><summary>Configurar tipos de alerta</summary><div>${activePrefs}</div></details></article><article class="card"><div class="card-header"><div><h2 class="card-title">Saúde do Open Finance</h2><p class="card-note">Coleta bancária, importação e volume por instituição.</p></div><button class="button small primary" data-action="refresh-open-finance">↻ Atualizar</button></div>${v21RenderOpenFinanceHealth(anomalyBundle.health)}</article></section>
+
+    <section class="grid two" style="margin-top:16px"><article class="card"><div class="card-header"><div><h2 class="card-title">Evolução do patrimônio</h2><p class="card-note">Último snapshot real de cada mês, a partir da v2.1.</p></div><button class="button small" data-action="v21-record-snapshot">Registrar agora</button></div>${v21RenderPatrimonyEvolution()}</article><article class="card"><div class="card-header"><div><h2 class="card-title">Composição patrimonial</h2><p class="card-note">Ativos e dívida de cartões separados.</p></div></div>${v21RenderAllocation(snapshot)}</article></section>
+
+    <article class="card" style="margin-top:16px"><div class="card-header"><div><h2 class="card-title">Verificação de consistência</h2><p class="card-note">Sinais para auditoria — nenhum dado é corrigido ou excluído automaticamente.</p></div><button class="button small" data-action="v21-integrity-details">Ver detalhes</button></div>${v21RenderAnomalies(anomalyBundle)}</article>
+
+    <section style="margin-top:24px"><div class="card-header"><div><h2 class="card-title">Investimentos 360°</h2><p class="card-note">Posição, resultado informado, liquidez, alocação e vencimentos conforme os campos disponíveis na Pluggy.</p></div></div>${v21RenderInvestmentAnalysis(investment)}</section>`;
+  return pageShell(content);
+}
+
+function v21OpenIntegrityDetails() {
+  const bundle = v21Anomalies();
+  const duplicateRows = bundle.duplicates.slice(0,8).map(group => `<div class="v21-detail-row"><div><strong>${esc(group[0]?.description || group[0]?.description_raw || 'Movimentação')}</strong><small>${formatDateBr(dateKey(group[0]?.transaction_date))} · mesma conta e valor</small></div><span class="chip pending">${group.length} registros</span><strong>${money.format(Math.abs(num(group[0]?.amount)))}</strong></div>`).join('');
+  const unmatchedRows = bundle.unmatchedCard.slice(0,8).map(tx => `<div class="v21-detail-row"><div><strong>${esc(tx.description)}</strong><small>${esc(tx.sourceLabel || 'Open Finance')} · ${formatDateBr(cashFlowDate(tx))}</small></div><span class="chip ignored">revisar</span><strong>${money.format(tx.amount)}</strong></div>`).join('');
+  const unusualRows = bundle.unusual.slice(0,8).map(item => `<div class="v21-detail-row"><div><strong>${esc(item.tx.description)}</strong><small>${esc(item.category)} · mediana ${money.format(item.median)}</small></div><span class="chip ignored">fora do padrão</span><strong>${money.format(item.tx.amount)}</strong></div>`).join('');
+  const body = `<div class="v21-detail-section"><h3>Possíveis duplicidades</h3><p>Mesma conta, data, valor e descrição. São apenas candidatos: compras realmente repetidas também podem aparecer aqui.</p>${duplicateRows || empty('Nenhum candidato encontrado.')}</div><div class="v21-detail-section"><h3>Liquidações sem correspondência</h3><p>Pagamentos bancários classificados como liquidação de cartão sem contrapartida de cartão identificada em ±3 dias.</p>${unmatchedRows || empty('Nenhum caso encontrado.')}</div><div class="v21-detail-section"><h3>Gastos fora do padrão</h3><p>Valores pelo menos 4× acima da mediana recente da mesma categoria, desde que haja histórico suficiente.</p>${unusualRows || empty('Nenhum gasto sinalizado.')}</div><div class="v21-detail-section"><h3>Sem categoria</h3><p>${bundle.uncategorized.length} movimentação${bundle.uncategorized.length === 1 ? '' : 'ões'} Open Finance dos últimos 90 dias.</p>${bundle.uncategorized.length ? `<button class="button primary" data-action="open-review-center">Abrir Central de Revisão</button>` : ''}</div>`;
+  openInfoModal('Detalhes da verificação', body);
+}
+
+const _v21PageShellV20 = pageShell;
+pageShell = function(content, extraAction = '') {
+  let enhanced = content;
+  if (ui.page === 'dashboard') enhanced = `${v21DashboardBanner()}${content}`;
+  if (ui.page === 'patrimony') enhanced = `${v21PatrimonyStrip()}${content}`;
+  return _v21PageShellV20(enhanced, extraAction);
+};
+
+bottomNav = function() {
+  return `<nav class="bottom-nav v18-bottom-nav" aria-label="Navegação principal">
+    <button class="${ui.page === 'dashboard' ? 'active' : ''}" data-page="dashboard"><span class="nav-icon">⌂</span><span>Início</span></button>
+    <button class="${ui.page === 'transactions' ? 'active' : ''}" data-page="transactions"><span class="nav-icon">⇄</span><span>Transações</span></button>
+    <button class="bottom-add-button" data-action="add-transaction" aria-label="Nova movimentação"><span>＋</span></button>
+    <button class="${ui.page === 'planning' ? 'active' : ''}" data-page="planning"><span class="nav-icon">◎</span><span>Planejar</span></button>
+    <button class="${['patrimony','reports','settings','intelligence'].includes(ui.page) ? 'active' : ''}" data-action="more-menu"><span class="nav-icon">•••</span><span>Mais</span></button>
+  </nav>`;
+};
+
+openMoreMenu = function() {
+  const alerts = v21Alerts().length;
+  const reviewCount = reviewCandidates().length;
+  const body = `<div class="more-menu-grid v19-more-menu">
+    <button data-action="more-page" data-target-page="intelligence"><span>✦</span><div><strong>Inteligência${alerts ? ` · ${alerts}` : ''}</strong><small>Alertas, Open Finance e patrimônio 360°</small></div></button>
+    <button data-action="open-agenda"><span>📅</span><div><strong>Agenda financeira</strong><small>Contas, receitas e saldo projetado</small></div></button>
+    <button data-action="open-review-center"><span>✓</span><div><strong>Revisar movimentações${reviewCount ? ` · ${reviewCount}` : ''}</strong><small>Categorias e regras automáticas</small></div></button>
+    <button data-action="more-page" data-target-page="patrimony"><span>▣</span><div><strong>Contas e cartões</strong><small>Saldos, faturas e investimentos</small></div></button>
+    <button data-action="more-page" data-target-page="reports"><span>▥</span><div><strong>Relatórios</strong><small>Análises por período e categoria</small></div></button>
+    <button data-action="more-page" data-target-page="settings"><span>⚙</span><div><strong>Configurações</strong><small>Conta, sincronização e preferências</small></div></button>
+  </div>`;
+  openInfoModal('Mais opções', body);
+};
+
+const _v21RenderV20 = render;
+render = function() {
+  if (ui.page !== 'intelligence') return _v21RenderV20();
+  applyTheme();
+  const app = document.getElementById('app');
+  if (!authReady || !authSession) return _v21RenderV20();
+  app.innerHTML = renderIntelligence();
+  updateSyncIndicator();
+};
+
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+  const action = button.dataset.action;
+  if (action === 'v21-dismiss-alert') {
+    const id = button.dataset.alertId || '';
+    if (!id) return;
+    v21EnsureState();
+    if (!v21DismissedSet().has(id)) state.dismissedAlerts.push({ id, dismissedAt: new Date().toISOString() });
+    if (state.dismissedAlerts.length > 500) state.dismissedAlerts = state.dismissedAlerts.slice(-500);
+    persist(); render();
+    return;
+  }
+  if (action === 'v21-restore-alerts') {
+    v21EnsureState(); state.dismissedAlerts = []; persist(); render(); showToast('Alertas dispensados foram restaurados.', { tone: 'success' }); return;
+  }
+  if (action === 'v21-record-snapshot') {
+    const changed = v21RecordPatrimonySnapshot();
+    if (changed) persist();
+    render(); showToast(changed ? 'Snapshot patrimonial registrado.' : 'O snapshot de hoje já está atualizado.', { tone: 'success' }); return;
+  }
+  if (action === 'v21-integrity-details') { v21OpenIntegrityDetails(); return; }
+});
+
+document.addEventListener('change', event => {
+  const key = event.target?.dataset?.v21AlertPref;
+  if (!key) return;
+  v21EnsureState();
+  state.alertPreferences[key] = Boolean(event.target.checked);
+  persist(); render();
+});
+
 
 initializeApp();

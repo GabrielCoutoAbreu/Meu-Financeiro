@@ -1,7 +1,7 @@
 {
   "name": "Meu Financeiro",
   "short_name": "Financeiro",
-  "description": "Controle financeiro pessoal com dashboard visual, central de cartões, relatórios avançados, agenda, automação e Open Finance.",
+  "description": "Controle financeiro pessoal com inteligência, patrimônio 360°, alertas, cartões, agenda, automação e Open Finance.",
   "lang": "pt-BR",
   "start_url": "./",
   "scope": "./",

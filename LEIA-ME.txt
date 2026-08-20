@@ -1,70 +1,75 @@
-MEU FINANCEIRO v2.0.0 — CARTÕES E RELATÓRIOS AVANÇADOS
+MEU FINANCEIRO v2.1.0 — INTELIGÊNCIA, CONFIABILIDADE E PATRIMÔNIO 360°
 
 OBJETIVO DESTA VERSÃO
-A v2.0.0 consolida o aplicativo como um painel financeiro pessoal mais próximo da experiência de produtos como Mobills e Organizze, sem copiar identidade visual e preservando as regras financeiras já validadas do Meu Financeiro.
+A v2.1.0 evolui o Meu Financeiro de painel de controle para uma central de acompanhamento financeiro. Ela preserva integralmente as regras de caixa, consumo, cartões, planejamento e Open Finance já validadas e acrescenta inteligência explicável sem alterar movimentações automaticamente.
 
 PRINCIPAIS NOVIDADES
 
-1. CENTRAL DE CARTÕES
-- Cada cartão passa a ter uma tela de detalhes própria.
-- Cartões Open Finance mostram fatura/saldo em aberto informado pelo banco, limite disponível e datas de fechamento/vencimento quando disponíveis.
-- Cartões manuais usam os lançamentos cadastrados para calcular o período.
-- A navegação permite alternar entre meses diretamente dentro do cartão.
-- A lista de compras do período fica acessível sem sair da central.
+1. NOVA TELA INTELIGÊNCIA
+- Nova opção no menu lateral e no menu Mais do iPhone.
+- Reúne alertas, saúde do Open Finance, patrimônio, consistência dos dados e investimentos.
+- A Visão Geral passa a mostrar um atalho com o indicador de saúde financeira e alertas prioritários.
 
-2. PARCELAS FUTURAS
-- Parcelamentos em andamento são identificados pelas informações installmentCurrent / installmentTotal.
-- O app apresenta parcelas restantes e compromissos estimados dos próximos meses.
-- A projeção de parcelas da Pluggy é informativa e não substitui a fatura oficial do banco.
-- Valores projetados não alteram saldo, patrimônio, fluxo de caixa ou consumo realizado.
+2. INDICADOR DE SAÚDE FINANCEIRA — 0 A 100
+- Indicador transparente, não é score de crédito.
+- Componentes visíveis: confiabilidade dos dados (30), categorização (20), planejamento (20), liquidez projetada (15) e uso dos cartões (15).
+- O usuário consegue entender exatamente por que a pontuação mudou.
 
-3. PRÓXIMOS 6 MESES DO CARTÃO
-- Nova visualização mostra compras já registradas e parcelas futuras estimadas mês a mês.
-- Ajuda a responder quanto dos próximos meses já está comprometido no cartão.
+3. ALERTAS INTELIGENTES
+- contas da Agenda vencidas;
+- orçamento próximo ou acima do limite;
+- cartão acima de 80%/95% do limite;
+- instituição Open Finance desatualizada;
+- movimentações recentes sem categoria;
+- gastos estatisticamente fora do padrão recente;
+- saldo projetado negativo.
+- Cada alerta pode ser dispensado.
+- Os tipos de alerta podem ser habilitados/desabilitados pelo usuário.
 
-4. RELATÓRIOS 2.0 — CAIXA X CONSUMO
-- Novo seletor explícito entre Caixa e Consumo.
-- Caixa = quando o dinheiro efetivamente entrou ou saiu das contas.
-- Consumo = quando a despesa aconteceu, incluindo compras pendentes do cartão.
-- Pagamentos de fatura aparecem no Caixa e não são contabilizados novamente como Consumo.
+4. CENTRAL DE SAÚDE DO OPEN FINANCE
+Para cada instituição mostra:
+- última coleta bancária conhecida;
+- última importação no Meu Financeiro;
+- última transação disponível;
+- quantidade de contas/cartões/transações;
+- situação Atualizado / Verificar / Desatualizado / Sem histórico.
 
-5. FILTROS AVANÇADOS
-Os relatórios agora podem ser filtrados simultaneamente por:
-- busca textual;
-- conta ou cartão;
-- tipo de movimentação;
-- categoria;
-- subcategoria;
-- membro;
-- situação;
-- origem Open Finance ou Manual;
-- período de 1, 3, 6 ou 12 meses, todo o histórico ou datas personalizadas.
+5. VERIFICAÇÃO DE CONSISTÊNCIA
+A v2.1 sinaliza, sem corrigir automaticamente:
+- possíveis duplicidades pela combinação conta + data + valor + descrição;
+- movimentações Open Finance sem categoria;
+- liquidações de cartão sem contrapartida identificada em ±3 dias;
+- gastos muito acima da mediana recente da própria categoria;
+- instituições que estão há muito tempo sem atualização.
 
-6. COMPARAÇÕES
-- Compara o período atual com o período imediatamente anterior de mesma duração.
-- Compara também com o mesmo período de um ano antes.
-- O comparativo muda de acordo com o modo Caixa ou Consumo e respeita os filtros ativos.
+IMPORTANTE: todos esses sinais são heurísticos. Eles servem para auditoria e não excluem, reclassificam ou alteram dados automaticamente.
 
-7. LEITURAS RÁPIDAS
-- Maior movimentação do período.
-- Maior categoria.
-- Média mensal.
-- Quantidade de registros encontrados.
+6. PATRIMÔNIO 360°
+- Patrimônio líquido, saldo disponível, investimentos e cartões em aberto ficam visíveis juntos.
+- Nova composição patrimonial separa recursos em conta, investimentos e dívida de cartões.
+- A tela Contas e cartões recebe uma faixa-resumo com acesso rápido ao Patrimônio 360°.
 
-8. QUALIDADE DOS DADOS
-- Mantém indicadores de pendências, ignorados e registros sem categoria.
-- Mostra quantos registros efetivamente entraram no cálculo.
-- Facilita auditar o relatório antes de tomar decisões.
+7. HISTÓRICO PATRIMONIAL REAL
+- A partir da v2.1, o app grava snapshots patrimoniais.
+- Um snapshot diário é mantido e sincronizado junto com o estado do usuário.
+- A evolução mostra o último snapshot disponível de cada mês.
+- Não há retroprojeção fictícia antes da v2.1.
 
-9. MOVIMENTAÇÕES DO RELATÓRIO
-- A própria tela de Relatórios mostra as movimentações correspondentes aos filtros.
-- Categorias continuam clicáveis para abrir o detalhamento.
-- Até 50 registros são exibidos na tela para desempenho; a exportação inclui todos.
+8. INVESTIMENTOS 360°
+Quando os campos estão disponíveis na Pluggy, mostra:
+- saldo investido;
+- valor aplicado;
+- resultado informado;
+- percentual sobre o valor aplicado;
+- valor disponível para resgate;
+- alocação por tipo;
+- vencimentos nos próximos 180 dias.
 
-10. EXPORTAÇÃO MELHORADA
-- Exportar movimentações filtradas respeita período, modo e todos os filtros.
-- Novo CSV de resumo contém indicadores, categorias e evolução mensal.
-- Exportação completa e backup JSON permanecem disponíveis.
+9. PRIVACIDADE E TRANSPARÊNCIA
+- Nenhuma IA externa recebe os dados financeiros nesta versão.
+- As regras e heurísticas rodam no próprio front-end.
+- Nenhum alerta altera os lançamentos.
+- O usuário sempre pode auditar a origem do sinal.
 
 REGRAS FINANCEIRAS PRESERVADAS
 - saldo disponível = contas bancárias; sem investimentos e sem limite de crédito;
@@ -75,12 +80,12 @@ REGRAS FINANCEIRAS PRESERVADAS
 - transferências entre contas próprias permanecem neutras;
 - regra de salário permanece ativa;
 - variação negativa do caixa não significa saldo bancário negativo;
-- Agenda da v1.9 continua sendo previsão e não movimento realizado;
-- projeções de parcelas da v2.0 são apenas estimativas e não alteram os cálculos realizados.
+- Agenda continua sendo previsão e não movimento realizado;
+- parcelas futuras continuam sendo estimativas e não alteram os cálculos realizados.
 
 OPEN FINANCE / SUPABASE
-Esta versão usa as mesmas tabelas e Edge Functions da v1.9.0.
-Não é necessário alterar SQL, RLS ou publicar novas funções.
+Esta versão usa as mesmas tabelas e Edge Functions da v2.0.0.
+Não é necessário alterar SQL, RLS nem publicar novas Edge Functions.
 
 EDGE FUNCTIONS COMPATÍVEIS
 - pluggy-connect-token
@@ -100,8 +105,8 @@ Substitua:
 - manifest.webmanifest
 - LEIA-ME.txt
 
-config.js e os ícones permanecem compatíveis e estão incluídos no pacote completo.
+config.js e os ícones continuam compatíveis e estão incluídos no pacote completo.
 
 CACHE / PWA
-O cache foi atualizado para meu-financeiro-v2.0.0.
-Depois do commit, no iPhone pode ser necessário fechar e abrir novamente o PWA para o Service Worker ativar a nova versão.
+O cache foi atualizado para meu-financeiro-v2.1.0.
+Depois do commit, feche e abra novamente o PWA no iPhone caso a atualização não apareça imediatamente.
