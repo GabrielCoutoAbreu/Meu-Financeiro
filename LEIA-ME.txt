@@ -1,37 +1,91 @@
-MEU FINANCEIRO v1.8.0 — NOVA EXPERIÊNCIA VISUAL
+MEU FINANCEIRO v1.9.0 — PREVISIBILIDADE E AUTOMAÇÃO
 
-Objetivo desta versão:
-- aproximar a experiência de uso dos melhores aplicativos de finanças pessoais, preservando a identidade do Meu Financeiro;
-- manter intactas as regras financeiras consolidadas na v1.7.1;
-- não alterar Supabase, Pluggy, SQL ou Edge Functions.
+OBJETIVO DESTA VERSÃO
+A v1.9.0 evolui a experiência visual da v1.8.0 com recursos de previsibilidade e redução de trabalho manual, mantendo as regras financeiras já validadas de caixa, consumo e patrimônio.
 
-Principais mudanças da v1.8.0:
-- nova Visão Geral com card principal de Saldo disponível em contas;
-- entradas, gastos em conta e faturas liquidadas ficam integrados ao card principal e continuam clicáveis;
-- opção de ocultar os valores do resumo da Visão Geral;
-- resumo rápido de Consumo, Investimentos, Patrimônio líquido e Cartões em aberto;
-- novo gráfico circular de gastos por categoria;
-- categorias passam a ter ícones e identidade visual;
-- categorias do dashboard são clicáveis e abrem as movimentações que compõem o valor;
-- nova seção Meus cartões com fatura atual, limite disponível e vencimento;
-- tela Movimentações reorganizada por dia, com linhas mais compactas e visuais;
-- navegação do iPhone passa a usar Início, Transações, botão central +, Planejar e Mais;
-- menu Mais concentra Contas e cartões, Relatórios e Configurações;
-- cartões e contas receberam acabamento visual mais próximo de um aplicativo financeiro nativo;
-- melhorias específicas de responsividade para iPhone.
+PRINCIPAIS NOVIDADES
 
-REGRAS FINANCEIRAS PRESERVADAS:
+1. SALDO PROJETADO
+- Novo card na Visão Geral mostra uma estimativa do saldo ao fim do mês selecionado.
+- A projeção parte do saldo bancário atual e considera compromissos conhecidos da Agenda, valores a receber e faturas conhecidas com vencimento dentro do horizonte.
+- A projeção não substitui o saldo real e é identificada explicitamente como estimativa.
+- Para meses passados, o app não tenta reconstruir uma projeção histórica artificial.
+
+2. AGENDA FINANCEIRA
+- Nova aba Agenda dentro de Planejamento.
+- Cadastro de contas a pagar e valores a receber.
+- Estados claros: A pagar / A receber, Pago / Recebido e Vencido.
+- Filtros por situação e tipo.
+- Resumo do mês com total a pagar, a receber, vencido e saldo projetado.
+- Compromissos da Agenda ficam separados das movimentações reais para evitar duplicidade com Open Finance.
+
+3. RECORRÊNCIAS
+- Contas e receitas previstas podem ser criadas como únicas, semanais, mensais ou anuais.
+- É possível gerar até 60 ocorrências de uma série.
+- Cada ocorrência permanece individualmente controlável na Agenda.
+
+4. PRÓXIMOS COMPROMISSOS
+- A Visão Geral passa a exibir compromissos dos próximos 45 dias.
+- Combina itens da Agenda e faturas conhecidas de cartões.
+- Itens vencidos recebem destaque visual.
+
+5. CENTRAL DE REVISÃO INTELIGENTE
+- Nova Central de revisão para movimentações recentes do Open Finance.
+- Permite confirmar a classificação sugerida ou alterar categoria, subcategoria, membro e tags.
+- Movimentações já cobertas por uma regra automática não precisam ser revisadas novamente.
+- A tela mostra até 40 itens por rodada para manter a revisão rápida.
+
+6. REGRAS AUTOMÁTICAS DE CATEGORIZAÇÃO
+- Ao classificar uma movimentação, o usuário pode criar uma regra do tipo “quando a descrição contiver X”.
+- Exemplo: UBER -> Transporte.
+- A regra é aplicada dinamicamente às movimentações importadas, inclusive ao histórico já disponível.
+- O dado original da Pluggy não é alterado; a classificação personalizada pertence ao Meu Financeiro.
+- Regras podem ser criadas, editadas, pausadas, reativadas ou excluídas em Planejamento > Automação.
+
+7. PLANEJAMENTO REORGANIZADO
+Planejamento agora possui quatro abas:
+- Agenda
+- Orçamentos
+- Objetivos
+- Automação
+
+8. ACESSO RÁPIDO
+- A Central de revisão aparece na barra lateral do desktop com contador de itens pendentes.
+- No menu Mais do iPhone foram adicionados Agenda financeira e Revisar movimentações.
+- A Visão Geral traz atalhos diretos para Agenda e Revisão.
+
+REGRAS FINANCEIRAS PRESERVADAS
 - investimentos não entram no fluxo de caixa mensal;
 - saldo disponível mostra apenas recursos bancários, sem investimentos e sem limite de crédito;
 - patrimônio líquido = contas + investimentos - cartões em aberto;
 - compras no cartão entram no consumo pela data da compra, inclusive quando pendentes;
 - pagamento de fatura é saída de caixa, mas não novo consumo;
 - transferências entre contas próprias permanecem neutras;
-- a regra de salário "TED CONTA SALARIO GABRIEL COUTO DE ABREU" permanece ativa;
-- variação mensal negativa não é apresentada como déficit.
+- a regra de salário “TED CONTA SALARIO GABRIEL COUTO DE ABREU” permanece ativa;
+- variação mensal negativa não é apresentada como déficit;
+- itens da Agenda são projeções e não entram automaticamente no consumo nem no fluxo realizado.
 
-ATUALIZAÇÃO NO GITHUB:
-Substitua:
+ARMAZENAMENTO E SINCRONIZAÇÃO
+Os novos dados da v1.9.0 ficam dentro do estado JSON já sincronizado em user_app_state:
+- scheduledTransactions
+- categoryRules
+- transactionOverrides
+- reviewedPluggyIds
+
+Por isso, esta versão NÃO exige alteração de SQL, RLS, tabelas Pluggy ou Edge Functions.
+
+OPEN FINANCE
+As Edge Functions atuais permanecem compatíveis:
+- pluggy-connect-token
+- pluggy-import-data
+- pluggy-refresh-items
+- pluggy-delete-item
+- pluggy-sync-data
+- pluggy-sync-transactions
+- pluggy-sync-investments
+
+ATUALIZAÇÃO NO GITHUB
+Substitua os arquivos:
 - app.js
 - index.html
 - styles.css
@@ -39,11 +93,18 @@ Substitua:
 - LEIA-ME.txt
 - manifest.webmanifest
 
-config.js, ícones, Supabase e Edge Functions não precisam ser alterados.
+config.js e os ícones podem permanecer os mesmos. O pacote completo também os inclui por conveniência.
 
-VERSÃO ANTERIOR — v1.7.1
-- Saldo bancário atual como indicador principal.
-- Variação mensal negativa não tratada como déficit.
-- Saídas separadas em gastos pagos pela conta e faturas liquidadas.
-- Cards de entradas, gastos em conta e faturas clicáveis para auditoria.
-- Relatórios usam o termo Variação do caixa.
+VALIDAÇÃO REALIZADA
+- sintaxe do app.js validada com Node.js;
+- sintaxe do sw.js validada;
+- teste básico de migração do estado v1.9.0;
+- teste básico de criação de recorrências;
+- teste básico do cálculo de saldo projetado.
+
+VERSÃO ANTERIOR — v1.8.0
+- redesign da Visão Geral;
+- navegação móvel estilo aplicativo nativo;
+- categorias visuais e gráfico circular;
+- cards de cartões e movimentações reorganizadas;
+- identidade visual própria preservada.

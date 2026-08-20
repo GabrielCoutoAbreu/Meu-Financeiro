@@ -1,8 +1,8 @@
 'use strict';
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
-const APP_VERSION = 4;
-const RELEASE_VERSION = '1.8.0';
+const APP_VERSION = 5;
+const RELEASE_VERSION = '1.9.0';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
@@ -3342,6 +3342,642 @@ document.addEventListener('click', event => {
   if (action === 'dashboard-category-details') {
     openDashboardCategoryDetails(button.dataset.category || 'Sem categoria');
   }
+});
+
+
+// ===== Meu Financeiro v1.9.0 — Previsibilidade e Automação =====
+// Mantém as regras financeiras da v1.7/v1.8 e adiciona planejamento futuro,
+// central de revisão e regras personalizadas para dados Open Finance.
+
+function defaultState() {
+  return {
+    version: APP_VERSION,
+    preferences: {
+      darkMode: false,
+      basis: 'cash',
+      hideDashboardValues: false,
+      showInstallHelp: true,
+      name: 'Meu Financeiro'
+    },
+    accounts: [],
+    cards: [],
+    transactions: [],
+    budgets: [],
+    goals: [],
+    scheduledTransactions: [],
+    categoryRules: [],
+    transactionOverrides: [],
+    reviewedPluggyIds: [],
+    categories: [
+      'Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Educação', 'Lazer', 'Serviços', 'Dívidas', 'Taxas', 'Vestuário', 'Viagem', 'Salário', 'Receitas variáveis', 'Investimentos', 'Presentes', 'Cashback', 'Outros'
+    ],
+    members: ['Pessoal', 'Família', 'Casa']
+  };
+}
+
+function normalizeState(data) {
+  const base = defaultState();
+  return {
+    version: APP_VERSION,
+    preferences: { ...base.preferences, ...(data?.preferences || {}) },
+    accounts: Array.isArray(data?.accounts) ? data.accounts : base.accounts,
+    cards: Array.isArray(data?.cards) ? data.cards : base.cards,
+    transactions: Array.isArray(data?.transactions) ? data.transactions : base.transactions,
+    budgets: Array.isArray(data?.budgets) ? data.budgets : base.budgets,
+    goals: Array.isArray(data?.goals) ? data.goals : base.goals,
+    scheduledTransactions: Array.isArray(data?.scheduledTransactions) ? data.scheduledTransactions : base.scheduledTransactions,
+    categoryRules: Array.isArray(data?.categoryRules) ? data.categoryRules : base.categoryRules,
+    transactionOverrides: Array.isArray(data?.transactionOverrides) ? data.transactionOverrides : base.transactionOverrides,
+    reviewedPluggyIds: Array.isArray(data?.reviewedPluggyIds) ? data.reviewedPluggyIds : base.reviewedPluggyIds,
+    categories: Array.isArray(data?.categories) ? data.categories : base.categories,
+    members: Array.isArray(data?.members) ? data.members : base.members
+  };
+}
+
+function hasMeaningfulData(candidate) {
+  if (!candidate) return false;
+  return ['accounts', 'cards', 'transactions', 'budgets', 'goals', 'scheduledTransactions', 'categoryRules']
+    .some(key => Array.isArray(candidate[key]) && candidate[key].length > 0);
+}
+
+function applyV19Classification(tx) {
+  if (!tx?.pluggyId) return tx;
+  const result = { ...tx, tags: [...(tx.tags || [])] };
+  const override = state.transactionOverrides.find(item => item.pluggyId === tx.pluggyId);
+  if (override) {
+    if (override.category) result.category = override.category;
+    if (override.subcategory != null) result.subcategory = override.subcategory;
+    if (override.member != null) result.member = override.member;
+    if (Array.isArray(override.tags)) result.tags = [...override.tags];
+    result.classificationSource = 'override';
+    return result;
+  }
+
+  const searchable = normalizeSearchText(`${tx.description || ''} ${tx.sourceLabel || ''}`);
+  const rules = [...state.categoryRules]
+    .filter(rule => rule && rule.enabled !== false && String(rule.match || '').trim())
+    .sort((a, b) => String(b.match || '').length - String(a.match || '').length);
+  const rule = rules.find(item => searchable.includes(normalizeSearchText(item.match)));
+  if (rule) {
+    if (rule.category) result.category = rule.category;
+    if (rule.subcategory != null) result.subcategory = rule.subcategory;
+    if (rule.member != null) result.member = rule.member;
+    if (Array.isArray(rule.tags) && rule.tags.length) result.tags = [...new Set([...result.tags, ...rule.tags])];
+    result.classificationSource = 'rule';
+    result.classificationRuleId = rule.id;
+  }
+  return result;
+}
+
+function openFinanceTransactions() {
+  return pluggyTransactions
+    .map(normalizePluggyTransaction)
+    .filter(Boolean)
+    .map(applyV19Classification);
+}
+
+function addReviewedPluggyId(pluggyId) {
+  if (!pluggyId) return;
+  if (!state.reviewedPluggyIds.includes(pluggyId)) state.reviewedPluggyIds.push(pluggyId);
+  if (state.reviewedPluggyIds.length > 5000) state.reviewedPluggyIds = state.reviewedPluggyIds.slice(-5000);
+}
+
+function suggestRuleMatch(description) {
+  const cleaned = String(description || '')
+    .replace(/\b\d{2,}\b/g, ' ')
+    .replace(/[*/#:_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const words = cleaned.split(' ').filter(word => word.length >= 3).slice(0, 4);
+  return words.join(' ') || cleaned.slice(0, 40);
+}
+
+function reviewCandidates() {
+  const reviewed = new Set(state.reviewedPluggyIds);
+  const cutoff = shiftDateDays(isoDate(), -60);
+  return openFinanceTransactions()
+    .filter(tx => tx.pluggyId && !reviewed.has(tx.pluggyId))
+    .filter(tx => ['expense', 'card', 'income'].includes(tx.type))
+    .filter(tx => !(tx.type === 'income' && localizedCategory(tx.category) === 'Salário'))
+    .filter(tx => tx.classificationSource !== 'rule' && tx.classificationSource !== 'override')
+    .filter(tx => {
+      const key = dateKey(tx.type === 'card' ? consumptionDate(tx) : transactionViewDate(tx));
+      return !key || key >= cutoff;
+    })
+    .sort((a, b) => {
+      const ad = dateKey(a.type === 'card' ? consumptionDate(a) : transactionViewDate(a));
+      const bd = dateKey(b.type === 'card' ? consumptionDate(b) : transactionViewDate(b));
+      return (bd || '').localeCompare(ad || '');
+    });
+}
+
+function openReviewCenter() {
+  const all = reviewCandidates();
+  const rows = all.slice(0, 40);
+  const body = `
+    <div class="review-summary">
+      <div><span>Pendentes de revisão</span><strong>${all.length}</strong></div>
+      <p>Confirme as sugestões do Open Finance ou ensine uma regra. Regras novas passam a valer também para movimentações antigas com descrição semelhante.</p>
+      ${all.length ? `<button class="button small" data-action="review-confirm-all">Confirmar ${Math.min(40, all.length)} sugestões exibidas</button>` : ''}
+    </div>
+    <div class="review-list">${rows.length ? rows.map(tx => {
+      const visual = categoryVisual(localizedCategory(tx.category));
+      const date = tx.type === 'card' ? consumptionDate(tx) : transactionViewDate(tx);
+      return `<article class="review-row">
+        <span class="category-avatar ${visual.tone}">${visual.icon}</span>
+        <div class="review-main"><strong>${esc(tx.description)}</strong><small>${esc(tx.sourceLabel || 'Open Finance')} · ${formatDateBr(date)} · ${esc(localizedCategory(tx.category || 'Sem categoria'))}${tx.subcategory ? ` › ${esc(tx.subcategory)}` : ''}</small></div>
+        <div class="review-value ${tx.type === 'income' ? 'positive' : 'negative'}">${tx.type === 'income' ? '+' : '−'}${money.format(tx.amount)}</div>
+        <div class="review-actions"><button class="button small" data-action="review-confirm" data-pluggy-id="${esc(tx.pluggyId)}">Confirmar</button><button class="button small primary" data-action="review-classify" data-pluggy-id="${esc(tx.pluggyId)}">Classificar</button></div>
+      </article>`;
+    }).join('') : `<div class="review-empty"><span>✓</span><strong>Tudo revisado</strong><p>Não há movimentações recentes aguardando sua confirmação.</p></div>`}</div>
+    ${all.length > 40 ? `<p class="card-note" style="margin-top:12px">Mostrando as 40 movimentações mais recentes de ${all.length}. Conforme você revisa, as próximas aparecem.</p>` : ''}`;
+  openInfoModal('Revisar movimentações', body);
+}
+
+function openReviewClassifyForm(pluggyId) {
+  const tx = openFinanceTransactions().find(item => item.pluggyId === pluggyId);
+  if (!tx) return showToast('Movimentação não encontrada.', { tone: 'warning' });
+  const formId = 'review-classify-form';
+  const suggested = suggestRuleMatch(tx.description);
+  const body = `<form id="${formId}" class="form-grid">
+    <div class="field full"><label>Movimentação</label><div class="review-form-transaction"><strong>${esc(tx.description)}</strong><span>${money.format(tx.amount)} · ${esc(tx.sourceLabel || 'Open Finance')}</span></div></div>
+    <div class="field"><label>Categoria *</label><input class="input" name="category" list="categories-list" required value="${esc(localizedCategory(tx.category || 'Outros'))}">${categoryDatalist()}</div>
+    <div class="field"><label>Subcategoria</label><input class="input" name="subcategory" value="${esc(tx.subcategory || '')}" placeholder="Ex.: Supermercado"></div>
+    <div class="field"><label>Membro</label><input class="input" name="member" list="members-list-review" value="${esc(tx.member || '')}"><datalist id="members-list-review">${state.members.map(item => `<option value="${esc(item)}">`).join('')}</datalist></div>
+    <div class="field"><label>Tags</label><input class="input" name="tags" value="${esc((tx.tags || []).join(', '))}" placeholder="fixo, trabalho..."></div>
+    <div class="field full review-rule-field"><label class="check-line"><input type="checkbox" name="createRule" checked> Criar regra automática para movimentações semelhantes</label></div>
+    <div class="field full"><label>Quando a descrição contiver</label><input class="input" name="match" value="${esc(suggested)}"><div class="form-help">Exemplo: usar “UBER” faz futuras movimentações que contenham UBER receberem esta classificação. A regra também é aplicada ao histórico importado.</div></div>
+  </form>`;
+  openModal('Classificar movimentação', body, formId, 'Salvar classificação', true);
+  document.getElementById(formId)?.addEventListener('submit', event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const record = {
+      pluggyId,
+      category: String(data.category || '').trim() || 'Outros',
+      subcategory: String(data.subcategory || '').trim(),
+      member: String(data.member || '').trim(),
+      tags: String(data.tags || '').split(',').map(item => item.trim()).filter(Boolean)
+    };
+    state.transactionOverrides = state.transactionOverrides.filter(item => item.pluggyId !== pluggyId);
+    state.transactionOverrides.push(record);
+    addReviewedPluggyId(pluggyId);
+
+    if (data.createRule === 'on' && String(data.match || '').trim()) {
+      const match = String(data.match).trim();
+      const existing = state.categoryRules.find(rule => normalizeSearchText(rule.match) === normalizeSearchText(match));
+      const ruleData = {
+        match,
+        category: record.category,
+        subcategory: record.subcategory,
+        member: record.member,
+        tags: record.tags,
+        enabled: true,
+        updatedAt: new Date().toISOString()
+      };
+      if (existing) Object.assign(existing, ruleData);
+      else state.categoryRules.push({ id: uid(), createdAt: new Date().toISOString(), ...ruleData });
+    }
+
+    persist();
+    closeModal();
+    render();
+    showToast('Classificação salva e aplicada.', { tone: 'success' });
+  });
+}
+
+function recurrenceLabel(value) {
+  return { none: 'Única', monthly: 'Mensal', weekly: 'Semanal', yearly: 'Anual' }[value] || value || 'Única';
+}
+
+function scheduleStatusInfo(item) {
+  if (item.status === 'paid') return { label: item.type === 'income' ? 'Recebido' : 'Pago', tone: 'confirmed' };
+  if (item.status === 'skipped') return { label: 'Ignorado', tone: 'ignored' };
+  const due = dateKey(item.dueDate);
+  if (due && due < isoDate()) return { label: 'Vencido', tone: 'pending overdue' };
+  return { label: item.type === 'income' ? 'A receber' : 'A pagar', tone: 'pending' };
+}
+
+function scheduledRowsForMonth(key = ui.month) {
+  return state.scheduledTransactions
+    .filter(item => dateKey(item.dueDate)?.slice(0, 7) === key)
+    .sort((a, b) => (dateKey(a.dueDate) || '').localeCompare(dateKey(b.dueDate) || ''));
+}
+
+function createScheduledOccurrences(base, recurrence = 'none', repeatCount = 1) {
+  const count = recurrence === 'none' ? 1 : clamp(Math.floor(num(repeatCount) || 1), 1, 60);
+  const seriesId = count > 1 ? uid() : '';
+  for (let i = 0; i < count; i++) {
+    let dueDate = base.dueDate;
+    if (i > 0 && recurrence === 'monthly') dueDate = shiftDateMonths(base.dueDate, i);
+    if (i > 0 && recurrence === 'weekly') dueDate = shiftDateDays(base.dueDate, i * 7);
+    if (i > 0 && recurrence === 'yearly') dueDate = shiftDateMonths(base.dueDate, i * 12);
+    state.scheduledTransactions.push({
+      ...base,
+      id: uid(),
+      dueDate,
+      status: 'pending',
+      recurrence,
+      seriesId,
+      occurrence: i + 1,
+      occurrenceTotal: count,
+      createdAt: new Date().toISOString()
+    });
+  }
+}
+
+function openScheduleForm(id = '', presetType = 'expense') {
+  const editing = state.scheduledTransactions.find(item => item.id === id);
+  const item = editing || {
+    description: '', amount: '', type: presetType, dueDate: isoDate(), category: presetType === 'income' ? 'Receitas variáveis' : 'Outros',
+    subcategory: '', member: '', tags: [], notes: '', recurrence: 'none', occurrenceTotal: 1
+  };
+  const formId = 'schedule-form';
+  const body = `<form id="${formId}" class="form-grid">
+    <input type="hidden" name="id" value="${esc(id)}">
+    <div class="field full"><label>Descrição *</label><input class="input" name="description" required maxlength="100" value="${esc(item.description)}" placeholder="Ex.: Internet, condomínio, salário"></div>
+    <div class="field"><label>Tipo *</label><select class="select" name="type">${selectOptions([['expense','Conta a pagar'],['income','Valor a receber']], item.type)}</select></div>
+    <div class="field"><label>Valor *</label><input class="input" name="amount" required type="number" min="0.01" step="0.01" value="${esc(item.amount)}"></div>
+    <div class="field"><label>Vencimento / previsão *</label><input class="input" name="dueDate" type="date" required value="${esc(item.dueDate)}"></div>
+    <div class="field"><label>Categoria</label><input class="input" name="category" list="categories-list" value="${esc(item.category || '')}">${categoryDatalist()}</div>
+    <div class="field"><label>Subcategoria</label><input class="input" name="subcategory" value="${esc(item.subcategory || '')}"></div>
+    <div class="field"><label>Membro</label><input class="input" name="member" list="members-list-schedule" value="${esc(item.member || '')}"><datalist id="members-list-schedule">${state.members.map(member => `<option value="${esc(member)}">`).join('')}</datalist></div>
+    ${editing ? '' : `<div class="field"><label>Recorrência</label><select class="select" name="recurrence">${selectOptions([['none','Não repetir'],['monthly','Mensal'],['weekly','Semanal'],['yearly','Anual']], item.recurrence || 'none')}</select></div>
+    <div class="field"><label>Quantidade de ocorrências</label><input class="input" name="repeatCount" type="number" min="1" max="60" value="${esc(item.occurrenceTotal || 12)}"><div class="form-help">Até 60 ocorrências. Ex.: 12 para um ano de contas mensais.</div></div>`}
+    <div class="field full"><label>Tags</label><input class="input" name="tags" value="${esc((item.tags || []).join(', '))}" placeholder="fixo, casa, trabalho"></div>
+    <div class="field full"><label>Observações</label><textarea class="textarea" name="notes">${esc(item.notes || '')}</textarea><div class="form-help">Itens da Agenda são projeções e não entram como gasto real. O movimento efetivo continua vindo do Open Finance ou de um lançamento manual.</div></div>
+  </form>`;
+  openModal(editing ? 'Editar compromisso' : (presetType === 'income' ? 'Novo valor a receber' : 'Nova conta a pagar'), body, formId, editing ? 'Atualizar' : 'Adicionar', true);
+  document.getElementById(formId)?.addEventListener('submit', event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const base = {
+      description: String(data.description || '').trim(),
+      amount: num(data.amount),
+      type: data.type === 'income' ? 'income' : 'expense',
+      dueDate: data.dueDate,
+      category: String(data.category || '').trim() || (data.type === 'income' ? 'Receitas variáveis' : 'Outros'),
+      subcategory: String(data.subcategory || '').trim(),
+      member: String(data.member || '').trim(),
+      tags: String(data.tags || '').split(',').map(value => value.trim()).filter(Boolean),
+      notes: String(data.notes || '').trim()
+    };
+    if (editing) Object.assign(editing, base);
+    else createScheduledOccurrences(base, data.recurrence || 'none', num(data.repeatCount) || 1);
+    persist(); closeModal(); render();
+    showToast(editing ? 'Compromisso atualizado.' : 'Compromisso adicionado à Agenda.', { tone: 'success' });
+  });
+}
+
+function nextDueDateForDay(day, from = isoDate()) {
+  const d = parseDate(from);
+  if (!d || !day) return '';
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  const last = new Date(y, m + 1, 0).getDate();
+  let candidate = new Date(y, m, Math.min(day, last), 12);
+  if (isoDate(candidate) < from) {
+    const next = new Date(y, m + 1, 1, 12);
+    const nextLast = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+    candidate = new Date(next.getFullYear(), next.getMonth(), Math.min(day, nextLast), 12);
+  }
+  return isoDate(candidate);
+}
+
+function knownCardObligations(endDate = shiftDateDays(isoDate(), 45)) {
+  const today = isoDate();
+  const earliest = shiftDateDays(today, -45);
+  const imported = pluggyAccounts
+    .filter(account => String(account.type).toUpperCase() === 'CREDIT')
+    .map(account => ({
+      id: `card:${account.pluggy_account_id}`,
+      description: `Fatura ${account.name || account.institution_name || 'Cartão'}`,
+      amount: Math.max(0, num(account.balance)),
+      dueDate: simpleDate(account.balance_due_date),
+      type: 'card',
+      source: 'Open Finance'
+    }))
+    .filter(item => item.amount > 0 && item.dueDate && item.dueDate >= earliest && item.dueDate <= endDate);
+
+  const manual = state.cards.map(card => {
+    const dueDate = nextDueDateForDay(num(card.dueDay), today);
+    const invoiceMonth = shiftMonth(monthKey(dueDate), dueDate.slice(8, 10) <= String(num(card.dueDay)).padStart(2, '0') ? -1 : 0);
+    const amount = cardInvoice(card.id, invoiceMonth);
+    return { id: `manual-card:${card.id}`, description: `Fatura ${card.name}`, amount, dueDate, type: 'card', source: 'Manual' };
+  }).filter(item => item.amount > 0 && item.dueDate && item.dueDate <= endDate);
+
+  return [...imported, ...manual].sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+}
+
+function financialProjection() {
+  const today = isoDate();
+  const end = monthEnd(ui.month);
+  if (end < today) return { available: false, today, end, projected: totalBankCashBalance(), income: 0, expense: 0, cards: 0, scheduled: [] };
+  const scheduled = state.scheduledTransactions.filter(item => item.status === 'pending' && dateKey(item.dueDate) && dateKey(item.dueDate) <= end);
+  const income = scheduled.filter(item => item.type === 'income').reduce((sum, item) => sum + num(item.amount), 0);
+  const expense = scheduled.filter(item => item.type === 'expense').reduce((sum, item) => sum + num(item.amount), 0);
+  const cardRows = knownCardObligations(end);
+  const cards = cardRows.reduce((sum, item) => sum + num(item.amount), 0);
+  return {
+    available: true,
+    today,
+    end,
+    bankCash: totalBankCashBalance(),
+    income,
+    expense,
+    cards,
+    scheduled,
+    cardRows,
+    projected: totalBankCashBalance() + income - expense - cards
+  };
+}
+
+function upcomingFinancialItems(limit = 7) {
+  const today = isoDate();
+  const end = shiftDateDays(today, 45);
+  const schedules = state.scheduledTransactions
+    .filter(item => item.status === 'pending' && dateKey(item.dueDate) && dateKey(item.dueDate) <= end)
+    .map(item => ({ ...item, source: 'Agenda' }));
+  return [...schedules, ...knownCardObligations(end)]
+    .sort((a, b) => (dateKey(a.dueDate) || '').localeCompare(dateKey(b.dueDate) || ''))
+    .slice(0, limit);
+}
+
+function renderUpcomingItem(item, compact = false) {
+  const due = dateKey(item.dueDate);
+  const overdue = due && due < isoDate() && item.status === 'pending';
+  const isIncome = item.type === 'income';
+  const icon = item.type === 'card' ? '💳' : isIncome ? '↓' : '↑';
+  return `<div class="upcoming-row ${overdue ? 'is-overdue' : ''}">
+    <span class="upcoming-icon ${isIncome ? 'income' : item.type === 'card' ? 'card' : 'expense'}">${icon}</span>
+    <div class="upcoming-main"><strong>${esc(item.description)}</strong><small>${formatDateBr(due)}${overdue ? ' · vencido' : ''}${item.source ? ` · ${esc(item.source)}` : ''}</small></div>
+    <strong class="${isIncome ? 'positive' : ''}">${isIncome ? '+' : '−'}${dashboardMoney(item.amount)}</strong>
+    ${compact ? '' : `<div class="upcoming-actions">${item.type !== 'card' && item.status === 'pending' ? `<button class="button small" data-action="schedule-paid" data-id="${esc(item.id)}">${isIncome ? 'Recebi' : 'Paguei'}</button>` : ''}</div>`}
+  </div>`;
+}
+
+function openCategoryRuleForm(id = '') {
+  const editing = state.categoryRules.find(rule => rule.id === id);
+  const rule = editing || { match: '', category: 'Outros', subcategory: '', member: '', tags: [], enabled: true };
+  const formId = 'category-rule-form';
+  const body = `<form id="${formId}" class="form-grid">
+    <div class="field full"><label>Quando a descrição contiver *</label><input class="input" name="match" required value="${esc(rule.match || '')}" placeholder="Ex.: UBER, IFOOD, SUPERMERCADO BH"><div class="form-help">Não diferencia maiúsculas/minúsculas. Use uma expressão específica o bastante para evitar classificações erradas.</div></div>
+    <div class="field"><label>Categoria *</label><input class="input" name="category" list="categories-list" required value="${esc(rule.category || 'Outros')}">${categoryDatalist()}</div>
+    <div class="field"><label>Subcategoria</label><input class="input" name="subcategory" value="${esc(rule.subcategory || '')}"></div>
+    <div class="field"><label>Membro</label><input class="input" name="member" list="members-list-rule" value="${esc(rule.member || '')}"><datalist id="members-list-rule">${state.members.map(member => `<option value="${esc(member)}">`).join('')}</datalist></div>
+    <div class="field"><label>Tags</label><input class="input" name="tags" value="${esc((rule.tags || []).join(', '))}"></div>
+    <div class="field full"><label class="check-line"><input type="checkbox" name="enabled" ${rule.enabled !== false ? 'checked' : ''}> Regra ativa</label></div>
+  </form>`;
+  openModal(editing ? 'Editar regra' : 'Nova regra automática', body, formId, editing ? 'Atualizar' : 'Criar regra', true);
+  document.getElementById(formId)?.addEventListener('submit', event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const record = {
+      match: String(data.match || '').trim(),
+      category: String(data.category || '').trim() || 'Outros',
+      subcategory: String(data.subcategory || '').trim(),
+      member: String(data.member || '').trim(),
+      tags: String(data.tags || '').split(',').map(value => value.trim()).filter(Boolean),
+      enabled: data.enabled === 'on',
+      updatedAt: new Date().toISOString()
+    };
+    if (editing) Object.assign(editing, record);
+    else state.categoryRules.push({ id: uid(), createdAt: new Date().toISOString(), ...record });
+    persist(); closeModal(); render();
+    showToast('Regra salva. A classificação foi atualizada.', { tone: 'success' });
+  });
+}
+
+function renderAgendaContent() {
+  ui.scheduleFilter = ui.scheduleFilter || 'all';
+  const monthRows = scheduledRowsForMonth();
+  const allOverdueRows = state.scheduledTransactions
+    .filter(item => item.status === 'pending' && dateKey(item.dueDate) && dateKey(item.dueDate) < isoDate())
+    .sort((a, b) => (dateKey(a.dueDate) || '').localeCompare(dateKey(b.dueDate) || ''));
+  const pendingRows = monthRows.filter(item => item.status === 'pending');
+  const income = pendingRows.filter(item => item.type === 'income').reduce((sum, item) => sum + num(item.amount), 0);
+  const expense = pendingRows.filter(item => item.type === 'expense').reduce((sum, item) => sum + num(item.amount), 0);
+  const overdue = allOverdueRows.reduce((sum, item) => sum + num(item.amount), 0);
+  const projection = financialProjection();
+
+  const sourceRows = ui.scheduleFilter === 'overdue' ? allOverdueRows : monthRows;
+  const filtered = sourceRows.filter(item => {
+    if (ui.scheduleFilter === 'pending') return item.status === 'pending';
+    if (ui.scheduleFilter === 'overdue') return true;
+    if (ui.scheduleFilter === 'income') return item.type === 'income';
+    if (ui.scheduleFilter === 'expense') return item.type === 'expense';
+    return true;
+  });
+
+  const list = filtered.map(item => {
+    const status = scheduleStatusInfo(item);
+    const visual = categoryVisual(item.category || 'Outros');
+    const series = item.seriesId ? ` · ${item.occurrence}/${item.occurrenceTotal} · ${recurrenceLabel(item.recurrence)}` : '';
+    return `<article class="schedule-row">
+      <span class="category-avatar ${visual.tone}">${item.type === 'income' ? '↓' : visual.icon}</span>
+      <div class="schedule-main"><strong>${esc(item.description)}</strong><small>${formatDateBr(item.dueDate)} · ${esc(item.category || 'Outros')}${series}</small></div>
+      <div class="schedule-value ${item.type === 'income' ? 'positive' : 'negative'}">${item.type === 'income' ? '+' : '−'}${money.format(item.amount)}<span class="chip ${status.tone}">${status.label}</span></div>
+      <div class="schedule-actions">
+        ${item.status === 'pending' ? `<button class="button small" data-action="schedule-paid" data-id="${item.id}">${item.type === 'income' ? 'Recebi' : 'Paguei'}</button>` : `<button class="button small" data-action="schedule-pending" data-id="${item.id}">Reabrir</button>`}
+        <button class="icon-button" data-action="edit-schedule" data-id="${item.id}" aria-label="Editar">✎</button>
+        <button class="icon-button" data-action="delete-schedule" data-id="${item.id}" aria-label="Excluir">×</button>
+      </div>
+    </article>`;
+  }).join('');
+
+  return `<div class="agenda-v19">
+    <section class="agenda-summary-grid">
+      <article class="card"><span>A pagar</span><strong class="negative">${money.format(expense)}</strong><small>${esc(formatMonthShort(ui.month))}</small></article>
+      <article class="card"><span>A receber</span><strong class="positive">${money.format(income)}</strong><small>${esc(formatMonthShort(ui.month))}</small></article>
+      <article class="card"><span>Vencido</span><strong class="${overdue ? 'warning' : 'positive'}">${money.format(overdue)}</strong><small>Compromissos pendentes</small></article>
+      <article class="card"><span>Saldo projetado</span><strong class="${projection.available && projection.projected < 0 ? 'negative' : 'positive'}">${projection.available ? money.format(projection.projected) : '—'}</strong><small>${projection.available ? `até ${formatDateBr(projection.end)}` : 'Selecione o mês atual ou futuro'}</small></article>
+    </section>
+    <article class="card" style="margin-top:16px">
+      <div class="card-header"><div><h2 class="card-title">Agenda financeira</h2><p class="card-note">Contas previstas ficam separadas das movimentações reais para evitar duplicidade com o Open Finance.</p></div><div class="row-actions"><button class="button" data-action="open-schedule-income">+ A receber</button><button class="button primary" data-action="open-schedule-expense">+ A pagar</button></div></div>
+      <div class="schedule-filters">
+        ${[['all','Todos'],['pending','Pendentes'],['overdue','Vencidos'],['expense','A pagar'],['income','A receber']].map(([value,label]) => `<button class="chip-filter ${ui.scheduleFilter === value ? 'active' : ''}" data-action="schedule-filter" data-filter="${value}">${label}</button>`).join('')}
+      </div>
+      <div class="schedule-list">${list || empty('Nenhum compromisso para este mês.')}</div>
+    </article>
+  </div>`;
+}
+
+function renderAutomationContent() {
+  const reviewCount = reviewCandidates().length;
+  const rules = [...state.categoryRules].sort((a, b) => String(a.match).localeCompare(String(b.match)));
+  return `<div class="automation-v19">
+    <section class="grid two">
+      <article class="card review-entry-card">
+        <div class="review-entry-icon">✓</div>
+        <div><span>Central de revisão</span><strong>${reviewCount ? `${reviewCount} para revisar` : 'Tudo revisado'}</strong><p>Confirme categorias importadas e ensine o aplicativo a classificar descrições recorrentes.</p></div>
+        <button class="button primary" data-action="open-review-center">Revisar agora</button>
+      </article>
+      <article class="card rule-info-card"><span>Automação ativa</span><strong>${state.categoryRules.filter(rule => rule.enabled !== false).length} regras</strong><p>As regras são aplicadas localmente aos dados da Pluggy e sincronizadas junto com o seu estado do aplicativo.</p><button class="button" data-action="open-rule">+ Nova regra</button></article>
+    </section>
+    <article class="card" style="margin-top:16px">
+      <div class="card-header"><div><h2 class="card-title">Regras de categorização</h2><p class="card-note">Ao encontrar o texto na descrição, o Meu Financeiro substitui a categoria exibida sem alterar o dado original da Pluggy.</p></div><button class="button primary" data-action="open-rule">+ Regra</button></div>
+      <div class="rule-list">${rules.length ? rules.map(rule => {
+        const visual = categoryVisual(rule.category || 'Outros');
+        return `<div class="rule-row ${rule.enabled === false ? 'is-disabled' : ''}">
+          <span class="category-avatar ${visual.tone}">${visual.icon}</span>
+          <div class="rule-main"><strong>Contém “${esc(rule.match)}”</strong><small>→ ${esc(rule.category || 'Outros')}${rule.subcategory ? ` › ${esc(rule.subcategory)}` : ''}${rule.member ? ` · ${esc(rule.member)}` : ''}</small></div>
+          <span class="chip ${rule.enabled === false ? 'ignored' : 'confirmed'}">${rule.enabled === false ? 'Pausada' : 'Ativa'}</span>
+          <div class="row-actions"><button class="button small" data-action="toggle-rule" data-id="${rule.id}">${rule.enabled === false ? 'Ativar' : 'Pausar'}</button><button class="icon-button" data-action="edit-rule" data-id="${rule.id}">✎</button><button class="icon-button" data-action="delete-rule" data-id="${rule.id}">×</button></div>
+        </div>`;
+      }).join('') : empty('Nenhuma regra criada. Classifique uma movimentação na Central de revisão para criar a primeira automaticamente.')}</div>
+    </article>
+  </div>`;
+}
+
+function renderPlanning() {
+  const budgets = state.budgets.filter(item => item.month === ui.month);
+  const budgetContent = `<div class="card-header"><div><h2 class="card-title">Orçamentos mensais</h2><p class="card-note">Defina limites por categoria.</p></div><button class="button primary" data-action="add-budget">+ Orçamento</button></div><div class="grid two">${budgets.map(budget => {
+    const spent = budgetSpent(budget);
+    const percent = budget.limit ? (spent / budget.limit) * 100 : 0;
+    const level = percent >= 100 ? 'danger' : percent >= budget.alertAt ? 'warning' : '';
+    return `<article class="card"><div class="card-header"><div><h3 class="card-title">${esc(budget.category)}</h3><p class="card-note">Alerta em ${budget.alertAt}%</p></div><div class="row-actions"><button class="icon-button" data-action="edit-budget" data-id="${budget.id}">✎</button><button class="icon-button" data-action="delete-budget" data-id="${budget.id}">×</button></div></div><div class="kpi-value ${percent > 100 ? 'negative' : ''}">${percent.toFixed(0)}%</div><div class="progress ${level}"><span style="width:${clamp(percent,0,100)}%"></span></div><div class="progress-meta" style="margin-top:8px"><span>${money.format(spent)} utilizados</span><strong>${money.format(budget.limit)}</strong></div></article>`;
+  }).join('') || empty('Nenhum orçamento para este mês.')}</div>`;
+
+  const goalContent = `<div class="card-header"><div><h2 class="card-title">Objetivos financeiros</h2><p class="card-note">Transforme metas em valores mensuráveis.</p></div><button class="button primary" data-action="add-goal">+ Objetivo</button></div><div class="grid two">${state.goals.map(goal => {
+    const progress = goal.target ? (goal.current / goal.target) * 100 : 0;
+    const deadline = parseDate(goal.deadline);
+    const monthsLeft = deadline ? Math.max(1, Math.ceil((deadline - new Date()) / (1000 * 60 * 60 * 24 * 30.44))) : 1;
+    const monthly = Math.max(0, goal.target - goal.current) / monthsLeft;
+    return `<article class="card goal-card"><div class="card-header"><div><h3 class="card-title">${esc(goal.name)}</h3><p class="card-note">Prazo: ${deadline ? shortDate.format(deadline) : 'não informado'}</p></div><div class="row-actions"><button class="icon-button" data-action="contribute-goal" data-id="${goal.id}" title="Registrar aporte">＋</button><button class="icon-button" data-action="edit-goal" data-id="${goal.id}">✎</button><button class="icon-button" data-action="delete-goal" data-id="${goal.id}">×</button></div></div><div class="kpi-value">${money.format(goal.current)}</div><div class="card-note">de ${money.format(goal.target)}</div><div class="progress" style="margin-top:14px"><span style="width:${clamp(progress,0,100)}%"></span></div><div class="progress-meta" style="margin-top:8px"><span>${progress.toFixed(0)}% concluído</span><strong>${money.format(monthly)}/mês</strong></div>${goal.notes ? `<p class="card-note" style="margin-top:12px">${esc(goal.notes)}</p>` : ''}</article>`;
+  }).join('') || empty('Nenhum objetivo cadastrado.')}</div>`;
+
+  const tab = ['agenda','budgets','goals','automation'].includes(ui.planningTab) ? ui.planningTab : 'budgets';
+  const tabs = `<div class="tabs planning-v19-tabs"><button class="tab ${tab === 'agenda' ? 'active' : ''}" data-action="planning-tab" data-tab="agenda">Agenda</button><button class="tab ${tab === 'budgets' ? 'active' : ''}" data-action="planning-tab" data-tab="budgets">Orçamentos</button><button class="tab ${tab === 'goals' ? 'active' : ''}" data-action="planning-tab" data-tab="goals">Objetivos</button><button class="tab ${tab === 'automation' ? 'active' : ''}" data-action="planning-tab" data-tab="automation">Automação</button></div>`;
+  const selected = tab === 'agenda' ? renderAgendaContent() : tab === 'budgets' ? budgetContent : tab === 'goals' ? goalContent : renderAutomationContent();
+  return pageShell(`${tabs}${selected}`);
+}
+
+function renderDashboard() {
+  const cashBreakdown = monthCashFlowBreakdown();
+  const categories = categoryTotals().slice(0, 6);
+  const consumption = monthConsumptionTotal();
+  const pendingCard = monthPendingCardTotal();
+  const bankCash = totalBankCashBalance();
+  const investments = totalInvestmentBalance();
+  const cardDebt = totalCreditDebt();
+  const netWorth = totalNetWorth();
+  const budgets = state.budgets.filter(item => item.month === ui.month).slice(0, 4);
+  const recent = monthTransactions().sort((a, b) => (transactionViewDate(b) || '').localeCompare(transactionViewDate(a) || '')).slice(0, 5);
+  const pendingRows = monthPendingTransactions();
+  const pending = pendingRows.reduce((sum, tx) => sum + num(tx.amount), 0);
+  const projection = financialProjection();
+  const upcoming = upcomingFinancialItems(5);
+  const reviewCount = reviewCandidates().length;
+  const scheduledOverdue = state.scheduledTransactions.filter(item => item.status === 'pending' && dateKey(item.dueDate) && dateKey(item.dueDate) < isoDate()).length;
+  const gettingStarted = state.accounts.length === 0 && state.transactions.length === 0 && pluggyAccounts.length === 0 && pluggyInvestments.length === 0 ? `
+    <article class="card getting-started" style="margin-bottom:16px"><div class="card-header"><div><h2 class="card-title">Comece por aqui</h2><p class="card-note">Cadastre contas manualmente ou conecte seu banco pelo Open Finance.</p></div></div><div class="toolbar"><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button><button class="button" data-action="add-account">+ Conta manual</button></div></article>` : '';
+
+  const categoryRows = categories.map(item => {
+    const visual = categoryVisual(item.category);
+    const pct = consumption ? (item.total / consumption) * 100 : 0;
+    return `<button class="category-summary-row" data-action="dashboard-category-details" data-category="${esc(visual.category)}"><span class="category-avatar ${visual.tone}">${visual.icon}</span><span class="category-summary-main"><strong>${esc(visual.category)}</strong><small>${pct.toFixed(0)}% do consumo</small></span><span class="category-summary-value">${dashboardMoney(item.total)}</span></button>`;
+  }).join('');
+
+  const content = `
+    ${gettingStarted}
+    <section class="balance-hero">
+      <div class="balance-hero-top"><div><span class="eyebrow">Saldo disponível em contas</span><h2>${dashboardMoney(bankCash)}</h2><p>Seu dinheiro disponível hoje, sem investimentos e sem limite de crédito.</p></div><button class="privacy-button" data-action="toggle-dashboard-privacy" aria-label="${state.preferences.hideDashboardValues ? 'Mostrar valores do resumo' : 'Ocultar valores do resumo'}">${state.preferences.hideDashboardValues ? '◉' : '◌'}</button></div>
+      <div class="balance-flow"><button data-action="cash-details" data-kind="income"><span class="flow-icon income">↓</span><span><small>Entradas</small><strong>${dashboardMoney(cashBreakdown.income)}</strong></span></button><button data-action="cash-details" data-kind="direct"><span class="flow-icon expense">↑</span><span><small>Gastos em conta</small><strong>${dashboardMoney(cashBreakdown.directExpenses)}</strong></span></button><button data-action="cash-details" data-kind="cards"><span class="flow-icon card">▰</span><span><small>Faturas</small><strong>${dashboardMoney(cashBreakdown.cardPayments)}</strong></span></button></div>
+      <div class="balance-variation"><span>Variação do saldo em ${esc(formatMonthShort(ui.month))}</span><strong class="${cashBreakdown.variation >= 0 ? 'positive' : 'warning'}">${dashboardSignedMoney(cashBreakdown.variation)}</strong><small>${cashBreakdown.variation >= 0 ? 'Seu caixa aumentou neste mês.' : 'Seu caixa diminuiu, mas isso não significa saldo negativo.'}</small></div>
+    </section>
+
+    <section class="forecast-card ${projection.available ? '' : 'is-history'}">
+      <div class="forecast-main"><div><span class="eyebrow">Saldo projetado</span><h3>${projection.available ? dashboardMoney(projection.projected) : '—'}</h3><p>${projection.available ? `Estimativa até ${formatDateBr(projection.end)} com compromissos já conhecidos.` : 'A projeção é exibida para o mês atual ou meses futuros.'}</p></div><span class="forecast-icon">↗</span></div>
+      ${projection.available ? `<div class="forecast-breakdown"><div><span>Saldo hoje</span><strong>${dashboardMoney(projection.bankCash)}</strong></div><div><span>A receber</span><strong class="positive">+${dashboardMoney(projection.income)}</strong></div><div><span>Contas previstas</span><strong>−${dashboardMoney(projection.expense)}</strong></div><div><span>Faturas conhecidas</span><strong>−${dashboardMoney(projection.cards)}</strong></div></div>` : ''}
+      <button class="forecast-link" data-action="open-agenda">Ver Agenda financeira →</button>
+    </section>
+
+    <section class="quick-finance-grid">
+      <article class="quick-finance-card"><span class="quick-icon">🛒</span><div><small>Consumo do mês</small><strong>${dashboardMoney(consumption)}</strong><span>${dashboardMoney(pendingCard)} pendentes no cartão</span></div></article>
+      <article class="quick-finance-card"><span class="quick-icon">📈</span><div><small>Investimentos</small><strong>${dashboardMoney(investments)}</strong><span>${pluggyInvestments.length} ativos importados</span></div></article>
+      <article class="quick-finance-card"><span class="quick-icon">◎</span><div><small>Patrimônio líquido</small><strong>${dashboardMoney(netWorth)}</strong><span>Contas + investimentos − cartões</span></div></article>
+      <article class="quick-finance-card"><span class="quick-icon">💳</span><div><small>Cartões em aberto</small><strong>${dashboardMoney(cardDebt)}</strong><span>Pagamento não vira novo consumo</span></div></article>
+    </section>
+
+    <section class="grid two dashboard-v18-grid dashboard-v19-priority" style="margin-top:18px">
+      <article class="card upcoming-card"><div class="card-header"><div><h2 class="card-title">Próximos compromissos</h2><p class="card-note">Agenda + faturas conhecidas nos próximos 45 dias.</p></div><button class="button small" data-action="open-agenda">Ver agenda</button></div><div class="upcoming-list">${upcoming.length ? upcoming.map(item => renderUpcomingItem(item, true)).join('') : empty('Nenhum compromisso previsto para os próximos dias.')}</div></article>
+      <article class="card review-dashboard-card"><div class="review-dashboard-top"><span class="review-dashboard-icon">✓</span><div><small>Revisão inteligente</small><strong>${reviewCount ? `${reviewCount} movimentações` : 'Tudo revisado'}</strong><p>${reviewCount ? 'Confirme categorias e crie regras para reduzir correções repetitivas.' : 'As movimentações recentes estão classificadas ou confirmadas.'}</p></div></div><button class="button ${reviewCount ? 'primary' : ''}" data-action="open-review-center">${reviewCount ? 'Revisar agora' : 'Abrir revisão'}</button>${state.categoryRules.length ? `<div class="review-rule-note">⚡ ${state.categoryRules.filter(rule => rule.enabled !== false).length} regras automáticas ativas</div>` : ''}</article>
+    </section>
+
+    <section class="grid two dashboard-v18-grid" style="margin-top:18px">
+      <article class="card spending-card"><div class="card-header"><div><h2 class="card-title">Gastos por categoria</h2><p class="card-note">Compras pendentes do cartão já entram no consumo.</p></div><button class="button small" data-page="reports">Ver relatório</button></div><div class="spending-overview">${dashboardCategoryDonut(categories, consumption)}<div class="category-summary-list">${categoryRows || empty('Ainda não há gastos neste mês.')}</div></div></article>
+      <article class="card budget-v18-card"><div class="card-header"><div><h2 class="card-title">Planejamento do mês</h2><p class="card-note">Acompanhe seus limites por categoria.</p></div><button class="button small" data-page="planning">Gerenciar</button></div>${budgets.length ? `<div class="stack">${budgets.map(renderBudgetProgress).join('')}</div>` : empty('Crie limites para acompanhar seus gastos.')}${budgetAlerts().length ? `<div class="budget-alert-summary"><span>⚠</span><div><strong>${budgetAlerts().length} categoria${budgetAlerts().length === 1 ? '' : 's'} em atenção</strong><small>Revise os limites antes do fim do mês.</small></div></div>` : ''}</article>
+    </section>
+
+    <section class="card dashboard-cards-section" style="margin-top:18px"><div class="card-header"><div><h2 class="card-title">Meus cartões</h2><p class="card-note">Fatura atual, limite disponível e vencimento em uma única visão.</p></div><button class="button small" data-page="patrimony">Ver todos</button></div>${dashboardCardsPreview()}</section>
+
+    <section class="grid two dashboard-v18-grid" style="margin-top:18px">
+      <article class="card recent-v18-card"><div class="card-header"><div><h2 class="card-title">Últimas movimentações</h2><p class="card-note">Conta, cartão e transferências organizados por categoria.</p></div><button class="button small" data-page="transactions">Ver todas</button></div>${recent.length ? recent.map(renderTransactionRow).join('') : empty('Nenhuma movimentação neste mês.')}</article>
+      <article class="card attention-v18-card"><div class="card-header"><div><h2 class="card-title">Atenção</h2><p class="card-note">Pendências, vencimentos e limites</p></div></div><div class="stack"><button class="attention-tile" data-action="show-pending-transactions"><span class="attention-icon">!</span><div><strong>Transações pendentes</strong><small>${pendingRows.length} registros aguardando confirmação</small></div><b>${dashboardMoney(pending)}</b></button>${scheduledOverdue ? `<button class="attention-tile" data-action="open-agenda"><span class="attention-icon">📅</span><div><strong>Agenda vencida</strong><small>${scheduledOverdue} compromisso${scheduledOverdue === 1 ? '' : 's'} ainda pendente${scheduledOverdue === 1 ? '' : 's'}</small></div><b>Ver</b></button>` : ''}${budgetAlerts().slice(0, 2).map(alert => `<div class="attention-tile"><span class="attention-icon budget">◎</span><div><strong>${esc(alert.title)}</strong><small>${esc(alert.message)}</small></div><b>${alert.percent.toFixed(0)}%</b></div>`).join('') || (!scheduledOverdue ? '<div class="attention-ok"><span>✓</span><div><strong>Tudo sob controle</strong><small>Nenhum orçamento próximo do limite.</small></div></div>' : '')}</div></article>
+    </section>`;
+  return pageShell(content, `<button class="button primary desktop-add-transaction" data-action="add-transaction"><span class="desktop-label">Nova movimentação</span><span>＋</span></button>`);
+}
+
+function pageShell(content, extraAction = '') {
+  const [title, subtitle] = PAGE_META[ui.page] || ['Meu Financeiro', 'Controle financeiro pessoal.'];
+  const monthControl = ui.page === 'settings' ? '' : `<div class="month-control" aria-label="Mês selecionado"><button class="icon-button" data-action="prev-month" aria-label="Mês anterior">‹</button><div class="month-label">${esc(formatMonthShort(ui.month))}</div><button class="icon-button" data-action="next-month" aria-label="Próximo mês">›</button></div>`;
+  const reviewCount = pluggyTransactions.length ? reviewCandidates().length : 0;
+  return `
+    <aside class="sidebar"><div class="brand"><div class="brand-mark">R$</div><div><div class="brand-title">${esc(state.preferences.name || 'Meu Financeiro')}</div><div class="brand-subtitle">Controle pessoal</div></div></div><nav class="nav">${NAV_ITEMS.map(([page, icon, label]) => `<button class="nav-button ${ui.page === page ? 'active' : ''}" data-page="${page}"><span class="nav-icon">${icon}</span>${label}</button>`).join('')}<button class="nav-button review-nav-button" data-action="open-review-center"><span class="nav-icon">✓</span>Revisar${reviewCount ? `<span class="nav-badge">${reviewCount > 99 ? '99+' : reviewCount}</span>` : ''}</button></nav><div class="sidebar-footer"><strong>☁ Sincronização segura.</strong><br>${esc(authSession?.user?.email || '')}</div></aside>
+    <main class="main"><header class="topbar"><div><h1 class="page-title">${title}</h1><p class="page-subtitle">${subtitle}</p></div><div class="top-actions">${monthControl}${extraAction}<button class="icon-button" data-action="sync-now" data-sync-indicator aria-label="Sincronizar">${syncStatusInfo().icon}</button><button class="icon-button" data-page="settings" aria-label="Configurações">⚙</button></div></header>${installHelp()}${content}</main>${bottomNav()}`;
+}
+
+function openMoreMenu() {
+  const reviewCount = reviewCandidates().length;
+  const body = `<div class="more-menu-grid v19-more-menu">
+    <button data-action="open-agenda"><span>📅</span><div><strong>Agenda financeira</strong><small>Contas, receitas e saldo projetado</small></div></button>
+    <button data-action="open-review-center"><span>✓</span><div><strong>Revisar movimentações${reviewCount ? ` · ${reviewCount}` : ''}</strong><small>Categorias e regras automáticas</small></div></button>
+    <button data-action="more-page" data-target-page="patrimony"><span>▣</span><div><strong>Contas e cartões</strong><small>Saldos, faturas e investimentos</small></div></button>
+    <button data-action="more-page" data-target-page="reports"><span>▥</span><div><strong>Relatórios</strong><small>Análises por período e categoria</small></div></button>
+    <button data-action="more-page" data-target-page="settings"><span>⚙</span><div><strong>Configurações</strong><small>Conta, sincronização e preferências</small></div></button>
+  </div>`;
+  openInfoModal('Mais opções', body);
+}
+
+// Ações exclusivas da v1.9.0. O listener anterior continua cuidando das ações legadas.
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+  const action = button.dataset.action;
+  const id = button.dataset.id;
+
+  if (action === 'open-review-center') { closeModal(); openReviewCenter(); return; }
+  if (action === 'review-confirm') {
+    addReviewedPluggyId(button.dataset.pluggyId || ''); persist(); openReviewCenter(); render(); return;
+  }
+  if (action === 'review-confirm-all') {
+    reviewCandidates().slice(0, 40).forEach(tx => addReviewedPluggyId(tx.pluggyId)); persist(); openReviewCenter(); render(); showToast('Sugestões confirmadas.', { tone: 'success' }); return;
+  }
+  if (action === 'review-classify') { openReviewClassifyForm(button.dataset.pluggyId || ''); return; }
+
+  if (action === 'open-agenda') { closeModal(); ui.page = 'planning'; ui.planningTab = 'agenda'; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  if (action === 'open-schedule-expense') { openScheduleForm('', 'expense'); return; }
+  if (action === 'open-schedule-income') { openScheduleForm('', 'income'); return; }
+  if (action === 'edit-schedule') { openScheduleForm(id); return; }
+  if (action === 'schedule-filter') { ui.scheduleFilter = button.dataset.filter || 'all'; render(); return; }
+  if (action === 'schedule-paid') {
+    const item = state.scheduledTransactions.find(row => row.id === id);
+    if (!item) return;
+    item.status = 'paid'; item.paidAt = isoDate(); persist(); render(); showToast(item.type === 'income' ? 'Valor marcado como recebido na Agenda.' : 'Conta marcada como paga na Agenda.', { tone: 'success' }); return;
+  }
+  if (action === 'schedule-pending') {
+    const item = state.scheduledTransactions.find(row => row.id === id);
+    if (!item) return;
+    item.status = 'pending'; item.paidAt = ''; persist(); render(); return;
+  }
+  if (action === 'delete-schedule') { confirmDelete('Excluir este compromisso da Agenda?', () => { state.scheduledTransactions = state.scheduledTransactions.filter(row => row.id !== id); }); return; }
+
+  if (action === 'open-rule') { openCategoryRuleForm(); return; }
+  if (action === 'edit-rule') { openCategoryRuleForm(id); return; }
+  if (action === 'toggle-rule') {
+    const rule = state.categoryRules.find(row => row.id === id); if (!rule) return; rule.enabled = rule.enabled === false; persist(); render(); return;
+  }
+  if (action === 'delete-rule') { confirmDelete('Excluir esta regra de categorização?', () => { state.categoryRules = state.categoryRules.filter(row => row.id !== id); }); return; }
 });
 
 initializeApp();
