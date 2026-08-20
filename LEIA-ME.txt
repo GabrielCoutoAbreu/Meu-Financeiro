@@ -1,81 +1,88 @@
-MEU FINANCEIRO v1.9.0 — PREVISIBILIDADE E AUTOMAÇÃO
+MEU FINANCEIRO v2.0.0 — CARTÕES E RELATÓRIOS AVANÇADOS
 
 OBJETIVO DESTA VERSÃO
-A v1.9.0 evolui a experiência visual da v1.8.0 com recursos de previsibilidade e redução de trabalho manual, mantendo as regras financeiras já validadas de caixa, consumo e patrimônio.
+A v2.0.0 consolida o aplicativo como um painel financeiro pessoal mais próximo da experiência de produtos como Mobills e Organizze, sem copiar identidade visual e preservando as regras financeiras já validadas do Meu Financeiro.
 
 PRINCIPAIS NOVIDADES
 
-1. SALDO PROJETADO
-- Novo card na Visão Geral mostra uma estimativa do saldo ao fim do mês selecionado.
-- A projeção parte do saldo bancário atual e considera compromissos conhecidos da Agenda, valores a receber e faturas conhecidas com vencimento dentro do horizonte.
-- A projeção não substitui o saldo real e é identificada explicitamente como estimativa.
-- Para meses passados, o app não tenta reconstruir uma projeção histórica artificial.
+1. CENTRAL DE CARTÕES
+- Cada cartão passa a ter uma tela de detalhes própria.
+- Cartões Open Finance mostram fatura/saldo em aberto informado pelo banco, limite disponível e datas de fechamento/vencimento quando disponíveis.
+- Cartões manuais usam os lançamentos cadastrados para calcular o período.
+- A navegação permite alternar entre meses diretamente dentro do cartão.
+- A lista de compras do período fica acessível sem sair da central.
 
-2. AGENDA FINANCEIRA
-- Nova aba Agenda dentro de Planejamento.
-- Cadastro de contas a pagar e valores a receber.
-- Estados claros: A pagar / A receber, Pago / Recebido e Vencido.
-- Filtros por situação e tipo.
-- Resumo do mês com total a pagar, a receber, vencido e saldo projetado.
-- Compromissos da Agenda ficam separados das movimentações reais para evitar duplicidade com Open Finance.
+2. PARCELAS FUTURAS
+- Parcelamentos em andamento são identificados pelas informações installmentCurrent / installmentTotal.
+- O app apresenta parcelas restantes e compromissos estimados dos próximos meses.
+- A projeção de parcelas da Pluggy é informativa e não substitui a fatura oficial do banco.
+- Valores projetados não alteram saldo, patrimônio, fluxo de caixa ou consumo realizado.
 
-3. RECORRÊNCIAS
-- Contas e receitas previstas podem ser criadas como únicas, semanais, mensais ou anuais.
-- É possível gerar até 60 ocorrências de uma série.
-- Cada ocorrência permanece individualmente controlável na Agenda.
+3. PRÓXIMOS 6 MESES DO CARTÃO
+- Nova visualização mostra compras já registradas e parcelas futuras estimadas mês a mês.
+- Ajuda a responder quanto dos próximos meses já está comprometido no cartão.
 
-4. PRÓXIMOS COMPROMISSOS
-- A Visão Geral passa a exibir compromissos dos próximos 45 dias.
-- Combina itens da Agenda e faturas conhecidas de cartões.
-- Itens vencidos recebem destaque visual.
+4. RELATÓRIOS 2.0 — CAIXA X CONSUMO
+- Novo seletor explícito entre Caixa e Consumo.
+- Caixa = quando o dinheiro efetivamente entrou ou saiu das contas.
+- Consumo = quando a despesa aconteceu, incluindo compras pendentes do cartão.
+- Pagamentos de fatura aparecem no Caixa e não são contabilizados novamente como Consumo.
 
-5. CENTRAL DE REVISÃO INTELIGENTE
-- Nova Central de revisão para movimentações recentes do Open Finance.
-- Permite confirmar a classificação sugerida ou alterar categoria, subcategoria, membro e tags.
-- Movimentações já cobertas por uma regra automática não precisam ser revisadas novamente.
-- A tela mostra até 40 itens por rodada para manter a revisão rápida.
+5. FILTROS AVANÇADOS
+Os relatórios agora podem ser filtrados simultaneamente por:
+- busca textual;
+- conta ou cartão;
+- tipo de movimentação;
+- categoria;
+- subcategoria;
+- membro;
+- situação;
+- origem Open Finance ou Manual;
+- período de 1, 3, 6 ou 12 meses, todo o histórico ou datas personalizadas.
 
-6. REGRAS AUTOMÁTICAS DE CATEGORIZAÇÃO
-- Ao classificar uma movimentação, o usuário pode criar uma regra do tipo “quando a descrição contiver X”.
-- Exemplo: UBER -> Transporte.
-- A regra é aplicada dinamicamente às movimentações importadas, inclusive ao histórico já disponível.
-- O dado original da Pluggy não é alterado; a classificação personalizada pertence ao Meu Financeiro.
-- Regras podem ser criadas, editadas, pausadas, reativadas ou excluídas em Planejamento > Automação.
+6. COMPARAÇÕES
+- Compara o período atual com o período imediatamente anterior de mesma duração.
+- Compara também com o mesmo período de um ano antes.
+- O comparativo muda de acordo com o modo Caixa ou Consumo e respeita os filtros ativos.
 
-7. PLANEJAMENTO REORGANIZADO
-Planejamento agora possui quatro abas:
-- Agenda
-- Orçamentos
-- Objetivos
-- Automação
+7. LEITURAS RÁPIDAS
+- Maior movimentação do período.
+- Maior categoria.
+- Média mensal.
+- Quantidade de registros encontrados.
 
-8. ACESSO RÁPIDO
-- A Central de revisão aparece na barra lateral do desktop com contador de itens pendentes.
-- No menu Mais do iPhone foram adicionados Agenda financeira e Revisar movimentações.
-- A Visão Geral traz atalhos diretos para Agenda e Revisão.
+8. QUALIDADE DOS DADOS
+- Mantém indicadores de pendências, ignorados e registros sem categoria.
+- Mostra quantos registros efetivamente entraram no cálculo.
+- Facilita auditar o relatório antes de tomar decisões.
+
+9. MOVIMENTAÇÕES DO RELATÓRIO
+- A própria tela de Relatórios mostra as movimentações correspondentes aos filtros.
+- Categorias continuam clicáveis para abrir o detalhamento.
+- Até 50 registros são exibidos na tela para desempenho; a exportação inclui todos.
+
+10. EXPORTAÇÃO MELHORADA
+- Exportar movimentações filtradas respeita período, modo e todos os filtros.
+- Novo CSV de resumo contém indicadores, categorias e evolução mensal.
+- Exportação completa e backup JSON permanecem disponíveis.
 
 REGRAS FINANCEIRAS PRESERVADAS
-- investimentos não entram no fluxo de caixa mensal;
-- saldo disponível mostra apenas recursos bancários, sem investimentos e sem limite de crédito;
+- saldo disponível = contas bancárias; sem investimentos e sem limite de crédito;
 - patrimônio líquido = contas + investimentos - cartões em aberto;
+- investimentos não entram no fluxo de caixa mensal;
 - compras no cartão entram no consumo pela data da compra, inclusive quando pendentes;
 - pagamento de fatura é saída de caixa, mas não novo consumo;
 - transferências entre contas próprias permanecem neutras;
-- a regra de salário “TED CONTA SALARIO GABRIEL COUTO DE ABREU” permanece ativa;
-- variação mensal negativa não é apresentada como déficit;
-- itens da Agenda são projeções e não entram automaticamente no consumo nem no fluxo realizado.
+- regra de salário permanece ativa;
+- variação negativa do caixa não significa saldo bancário negativo;
+- Agenda da v1.9 continua sendo previsão e não movimento realizado;
+- projeções de parcelas da v2.0 são apenas estimativas e não alteram os cálculos realizados.
 
-ARMAZENAMENTO E SINCRONIZAÇÃO
-Os novos dados da v1.9.0 ficam dentro do estado JSON já sincronizado em user_app_state:
-- scheduledTransactions
-- categoryRules
-- transactionOverrides
-- reviewedPluggyIds
+OPEN FINANCE / SUPABASE
+Esta versão usa as mesmas tabelas e Edge Functions da v1.9.0.
+Não é necessário alterar SQL, RLS ou publicar novas funções.
 
-Por isso, esta versão NÃO exige alteração de SQL, RLS, tabelas Pluggy ou Edge Functions.
-
-OPEN FINANCE
-As Edge Functions atuais permanecem compatíveis:
+EDGE FUNCTIONS COMPATÍVEIS
 - pluggy-connect-token
 - pluggy-import-data
 - pluggy-refresh-items
@@ -84,27 +91,17 @@ As Edge Functions atuais permanecem compatíveis:
 - pluggy-sync-transactions
 - pluggy-sync-investments
 
-ATUALIZAÇÃO NO GITHUB
-Substitua os arquivos:
+ARQUIVOS PARA ATUALIZAR NO GITHUB
+Substitua:
 - app.js
-- index.html
 - styles.css
+- index.html
 - sw.js
-- LEIA-ME.txt
 - manifest.webmanifest
+- LEIA-ME.txt
 
-config.js e os ícones podem permanecer os mesmos. O pacote completo também os inclui por conveniência.
+config.js e os ícones permanecem compatíveis e estão incluídos no pacote completo.
 
-VALIDAÇÃO REALIZADA
-- sintaxe do app.js validada com Node.js;
-- sintaxe do sw.js validada;
-- teste básico de migração do estado v1.9.0;
-- teste básico de criação de recorrências;
-- teste básico do cálculo de saldo projetado.
-
-VERSÃO ANTERIOR — v1.8.0
-- redesign da Visão Geral;
-- navegação móvel estilo aplicativo nativo;
-- categorias visuais e gráfico circular;
-- cards de cartões e movimentações reorganizadas;
-- identidade visual própria preservada.
+CACHE / PWA
+O cache foi atualizado para meu-financeiro-v2.0.0.
+Depois do commit, no iPhone pode ser necessário fechar e abrir novamente o PWA para o Service Worker ativar a nova versão.

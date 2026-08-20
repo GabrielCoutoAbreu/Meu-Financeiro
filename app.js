@@ -1,8 +1,8 @@
 'use strict';
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
-const APP_VERSION = 5;
-const RELEASE_VERSION = '1.9.0';
+const APP_VERSION = 6;
+const RELEASE_VERSION = '2.0.0';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
@@ -3978,6 +3978,600 @@ document.addEventListener('click', event => {
     const rule = state.categoryRules.find(row => row.id === id); if (!rule) return; rule.enabled = rule.enabled === false; persist(); render(); return;
   }
   if (action === 'delete-rule') { confirmDelete('Excluir esta regra de categorização?', () => { state.categoryRules = state.categoryRules.filter(row => row.id !== id); }); return; }
+});
+
+
+
+// ===== Meu Financeiro v2.0.0 — Cartões e Relatórios =====
+// Central de cartões, parcelas futuras, filtros avançados, comparação de períodos
+// e análise explícita por Caixa x Consumo. Não altera os dados originais da Pluggy.
+
+ui.reportMode = ui.reportMode || 'cash';
+ui.reportSource = ui.reportSource || 'all';
+ui.reportCategory = ui.reportCategory || 'all';
+ui.reportSubcategory = ui.reportSubcategory || 'all';
+ui.reportMember = ui.reportMember || 'all';
+ui.reportStatus = ui.reportStatus || 'all';
+ui.reportOrigin = ui.reportOrigin || 'all';
+ui.reportTypeV2 = ui.reportTypeV2 || 'all';
+ui.reportSearchV2 = ui.reportSearchV2 || '';
+ui.cardCenterMonth = ui.cardCenterMonth || ui.month;
+
+function v2CardCatalog() {
+  const imported = pluggyAccounts
+    .filter(account => String(account.type || '').toUpperCase() === 'CREDIT')
+    .map(account => {
+      const invoice = Math.max(0, num(account.balance));
+      const available = account.available_credit_limit == null ? null : num(account.available_credit_limit);
+      const limit = available == null ? null : Math.max(0, available + invoice);
+      return {
+        id: `pluggy-card:${account.pluggy_account_id}`,
+        kind: 'openfinance',
+        pluggyAccountId: account.pluggy_account_id,
+        name: account.name || 'Cartão',
+        institution: account.institution_name || 'MeuPluggy',
+        brand: accountSubtypeLabel(account.subtype) || 'Crédito',
+        currentInvoice: invoice,
+        available,
+        limit,
+        closeDate: simpleDate(account.balance_close_date),
+        dueDate: simpleDate(account.balance_due_date),
+        raw: account
+      };
+    });
+
+  const manual = state.cards.map(card => ({
+    id: card.id,
+    kind: 'manual',
+    name: card.name || 'Cartão manual',
+    institution: card.brand || 'Manual',
+    brand: card.brand || 'Cartão',
+    currentInvoice: cardInvoice(card.id, ui.month),
+    available: card.limit == null ? null : num(card.limit) - cardInvoice(card.id, ui.month),
+    limit: card.limit == null ? null : num(card.limit),
+    closeDate: card.closingDay ? `dia ${card.closingDay}` : '',
+    dueDate: card.dueDay ? `dia ${card.dueDay}` : '',
+    raw: card
+  }));
+
+  return [...imported, ...manual];
+}
+
+function v2CardById(cardId) {
+  return v2CardCatalog().find(card => card.id === cardId) || null;
+}
+
+function v2CardTransactions(cardId, key = ui.month, includePending = true) {
+  return allTransactions()
+    .filter(tx => validForCalculations(tx) && tx.type === 'card' && tx.cardId === cardId)
+    .filter(tx => includePending || tx.status === 'confirmed')
+    .filter(tx => isInMonth(consumptionDate(tx), key))
+    .sort((a, b) => (consumptionDate(b) || '').localeCompare(consumptionDate(a) || ''));
+}
+
+function v2CardMonthTotal(cardId, key = ui.month) {
+  return v2CardTransactions(cardId, key, true).reduce((sum, tx) => sum + num(tx.amount), 0);
+}
+
+function v2CardInstallmentGroups(cardId) {
+  const rows = allTransactions()
+    .filter(tx => validForCalculations(tx) && tx.type === 'card' && tx.cardId === cardId && num(tx.installmentTotal) > 1);
+  const groups = new Map();
+  for (const tx of rows) {
+    const normalized = normalizeSearchText(tx.description || '').replace(/\s+/g, ' ').trim();
+    const key = `${normalized}|${num(tx.amount).toFixed(2)}|${num(tx.installmentTotal)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(tx);
+  }
+  return [...groups.values()].map(group => group.sort((a, b) => {
+    const installmentDiff = num(b.installmentCurrent) - num(a.installmentCurrent);
+    if (installmentDiff) return installmentDiff;
+    return (consumptionDate(b) || '').localeCompare(consumptionDate(a) || '');
+  }));
+}
+
+function v2ProjectedInstallments(cardId, horizonMonths = 12) {
+  const projections = [];
+  const horizonEnd = shiftMonth(monthKey(new Date()), horizonMonths);
+  for (const group of v2CardInstallmentGroups(cardId)) {
+    const latest = group[0];
+    const current = Math.max(1, num(latest.installmentCurrent));
+    const total = Math.max(current, num(latest.installmentTotal));
+    const baseDate = consumptionDate(latest);
+    if (!baseDate || current >= total) continue;
+    for (let installment = current + 1; installment <= total; installment++) {
+      const offset = installment - current;
+      const projectedDate = shiftDateMonths(baseDate, offset);
+      const projectedMonth = projectedDate.slice(0, 7);
+      if (projectedMonth > horizonEnd) break;
+      const alreadyExists = group.some(row => num(row.installmentCurrent) === installment && isInMonth(consumptionDate(row), projectedMonth));
+      if (alreadyExists) continue;
+      projections.push({
+        description: latest.description,
+        amount: num(latest.amount),
+        installment,
+        total,
+        date: projectedDate,
+        month: projectedMonth,
+        category: localizedCategory(latest.category),
+        estimated: true
+      });
+    }
+  }
+  return projections.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function v2CardCommitmentMonths(cardId, startKey = ui.month, count = 6) {
+  const projected = v2ProjectedInstallments(cardId, Math.max(12, count + 2));
+  const months = [];
+  for (let i = 0; i < count; i++) {
+    const key = shiftMonth(startKey, i);
+    const actual = v2CardMonthTotal(cardId, key);
+    const estimated = projected.filter(row => row.month === key).reduce((sum, row) => sum + row.amount, 0);
+    months.push({ key, actual, estimated, total: actual + estimated });
+  }
+  return months;
+}
+
+function v2CardLimitPercent(card, selectedMonth = ui.month) {
+  if (!card?.limit) return 0;
+  const used = card.kind === 'openfinance' && selectedMonth === monthKey(new Date())
+    ? card.currentInvoice
+    : v2CardMonthTotal(card.id, selectedMonth);
+  return clamp((used / card.limit) * 100, 0, 100);
+}
+
+function v2RenderCardCenter(cardId, selectedMonth = ui.cardCenterMonth || ui.month) {
+  const card = v2CardById(cardId);
+  if (!card) return '<div class="empty">Cartão não encontrado.</div>';
+  ui.cardCenterMonth = selectedMonth;
+  const rows = v2CardTransactions(card.id, selectedMonth, true);
+  const monthTotal = rows.reduce((sum, tx) => sum + num(tx.amount), 0);
+  const pending = rows.filter(tx => tx.status === 'pending').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const currentMonth = monthKey(new Date());
+  const displayInvoice = card.kind === 'openfinance' && selectedMonth === currentMonth ? card.currentInvoice : monthTotal;
+  const available = card.limit == null ? null : Math.max(0, card.limit - displayInvoice);
+  const percent = card.limit ? clamp((displayInvoice / card.limit) * 100, 0, 100) : 0;
+  const monthTabs = [-2,-1,0,1,2].map(offset => shiftMonth(selectedMonth, offset));
+  const commitments = v2CardCommitmentMonths(card.id, selectedMonth, 6);
+  const maxCommitment = Math.max(1, ...commitments.map(item => item.total));
+  const projections = v2ProjectedInstallments(card.id, 12).filter(item => item.month >= selectedMonth).slice(0, 20);
+  const groupedSeries = v2CardInstallmentGroups(card.id)
+    .map(group => group[0])
+    .filter(tx => num(tx.installmentCurrent) < num(tx.installmentTotal))
+    .sort((a, b) => (consumptionDate(b) || '').localeCompare(consumptionDate(a) || ''))
+    .slice(0, 8);
+
+  return `<div class="v2-card-center">
+    <section class="v2-card-hero">
+      <div class="v2-card-hero-top"><div><small>${esc(card.institution)}</small><h3>${esc(card.name)}</h3><span>${esc(card.brand)}</span></div><div class="v2-card-chip">${card.kind === 'openfinance' ? 'Open Finance' : 'Manual'}</div></div>
+      <div class="v2-card-hero-grid">
+        <div><span>${card.kind === 'openfinance' && selectedMonth === currentMonth ? 'Fatura/saldo em aberto' : `Compras em ${esc(formatMonthShort(selectedMonth))}`}</span><strong>${money.format(displayInvoice)}</strong></div>
+        <div><span>Limite disponível</span><strong>${available == null ? '—' : money.format(available)}</strong></div>
+        <div><span>Pendente no período</span><strong>${money.format(pending)}</strong></div>
+      </div>
+      ${card.limit ? `<div class="v2-limit-row"><div><span>Uso do limite</span><b>${percent.toFixed(0)}%</b></div><div class="v2-limit-track"><span style="width:${percent}%"></span></div><small>Limite total estimado: ${money.format(card.limit)}</small></div>` : ''}
+      <div class="v2-card-dates">${card.closeDate ? `<span>Fecha: <b>${esc(card.closeDate)}</b></span>` : ''}${card.dueDate ? `<span>Vence: <b>${esc(card.dueDate)}</b></span>` : ''}</div>
+    </section>
+
+    <div class="v2-card-month-tabs">${monthTabs.map(key => `<button class="${key === selectedMonth ? 'active' : ''}" data-action="card-center-month" data-card-id="${esc(card.id)}" data-month="${key}">${esc(formatMonthShort(key))}</button>`).join('')}</div>
+
+    <section class="v2-card-center-section">
+      <div class="v2-section-title"><div><h3>Compras do período</h3><p>${rows.length} movimentações · total ${money.format(monthTotal)}</p></div></div>
+      <div class="v2-card-transaction-list">${rows.length ? rows.map(tx => renderTransactionRow(tx)).join('') : empty('Nenhuma compra encontrada neste mês.')}</div>
+    </section>
+
+    <section class="v2-card-center-section">
+      <div class="v2-section-title"><div><h3>Próximos 6 meses</h3><p>Compras já registradas + parcelas futuras estimadas.</p></div></div>
+      <div class="v2-card-commitments">${commitments.map(item => `<div class="v2-commitment-row"><span>${esc(formatMonthShort(item.key))}</span><div class="v2-commitment-track"><i style="width:${(item.total / maxCommitment) * 100}%"></i></div><strong>${money.format(item.total)}</strong><small>${item.estimated ? `+ ${money.format(item.estimated)} estimados` : 'registrado'}</small></div>`).join('')}</div>
+    </section>
+
+    <section class="v2-card-center-section v2-installment-section">
+      <div class="v2-section-title"><div><h3>Parcelamentos em andamento</h3><p>Ajuda a enxergar quanto dos próximos meses já está comprometido.</p></div></div>
+      ${groupedSeries.length ? `<div class="v2-installment-list">${groupedSeries.map(tx => `<div class="v2-installment-row"><div><strong>${esc(tx.description)}</strong><span>${esc(localizedCategory(tx.category))} · parcela ${num(tx.installmentCurrent)}/${num(tx.installmentTotal)}</span></div><div><b>${money.format(tx.amount)}</b><small>${num(tx.installmentTotal) - num(tx.installmentCurrent)} restantes</small></div></div>`).join('')}</div>` : empty('Nenhum parcelamento em andamento identificado.')}
+      ${projections.length ? `<div class="v2-estimate-note">Estimativas futuras são calculadas a partir das informações de parcelamento já importadas. Elas não substituem a fatura oficial do banco.</div>` : ''}
+    </section>
+  </div>`;
+}
+
+function openV2CardCenter(cardId, selectedMonth = ui.cardCenterMonth || ui.month) {
+  const card = v2CardById(cardId);
+  if (!card) return showToast('Cartão não encontrado.', { tone: 'warning' });
+  openInfoModal(`Cartão · ${card.name}`, v2RenderCardCenter(cardId, selectedMonth));
+}
+
+function dashboardCardsPreview() {
+  const cards = v2CardCatalog().slice(0, 4);
+  if (!cards.length) return empty('Nenhum cartão conectado ou cadastrado.');
+  return `<div class="dashboard-card-strip">${cards.map(card => {
+    const currentMonth = monthKey(new Date());
+    const invoice = card.kind === 'openfinance' ? card.currentInvoice : v2CardMonthTotal(card.id, ui.month);
+    const available = card.limit == null ? null : Math.max(0, card.limit - invoice);
+    const percent = card.limit ? clamp((invoice / card.limit) * 100, 0, 100) : 0;
+    return `<button class="mini-credit-card v2-mini-credit-card" data-action="open-card-center" data-card-id="${esc(card.id)}">
+      <div class="mini-card-top"><div><small>${esc(card.institution)}</small><strong>${esc(card.name)}</strong></div><span>▰</span></div>
+      <div class="mini-card-label">${card.kind === 'openfinance' ? 'Fatura atual' : `Compras · ${esc(formatMonthShort(ui.month))}`}</div>
+      <div class="mini-card-invoice">${dashboardMoney(invoice)}</div>
+      <div class="mini-card-progress"><span style="width:${percent}%"></span></div>
+      <div class="mini-card-footer"><span>Disponível ${available == null ? '—' : dashboardMoney(available)}</span><span>Ver detalhes ›</span></div>
+    </button>`;
+  }).join('')}</div>`;
+}
+
+function renderPatrimony() {
+  const cards = v2CardCatalog();
+  const importedCards = cards.filter(card => card.kind === 'openfinance');
+  const manualCards = cards.filter(card => card.kind === 'manual');
+  const openBankCards = pluggyAccounts.filter(account => String(account.type).toUpperCase() === 'BANK').map(account => `<article class="card account-card open-finance-account"><div class="card-header"><div><div class="card-brand">OPEN FINANCE</div><h2 class="card-title">${esc(account.name)}</h2><p class="card-note">${esc(accountSubtypeLabel(account.subtype))} · ${esc(account.institution_name || 'MeuPluggy')}</p></div><span class="chip confirmed">Automática</span></div><div class="account-balance ${num(account.balance) >= 0 ? 'positive' : 'negative'}">${money.format(num(account.balance))}</div><div class="card-note">Saldo informado pela instituição</div></article>`).join('');
+
+  const importedCardHtml = importedCards.map(card => {
+    const invoice = card.currentInvoice;
+    const percent = card.limit ? clamp((invoice / card.limit) * 100, 0, 100) : 0;
+    return `<article class="card credit-card open-finance-account v2-credit-card"><div class="card-header"><div><div class="card-brand">OPEN FINANCE · CRÉDITO</div><h2 class="card-title">${esc(card.name)}</h2><p class="card-note">${esc(card.institution)}</p></div><span class="chip confirmed">Automático</span></div><div class="card-limit">${money.format(invoice)}</div><div class="card-note">Fatura/saldo em aberto informado pelo banco</div>${card.limit ? `<div class="progress-row" style="margin-top:16px"><div class="progress-meta"><span>Limite disponível</span><strong>${money.format(Math.max(0, card.limit - invoice))}</strong></div><div class="progress ${percent >= 100 ? 'danger' : percent >= 80 ? 'warning' : ''}"><span style="width:${percent}%"></span></div><div class="card-note">Limite total estimado: ${money.format(card.limit)}</div></div>` : ''}<div class="v2-card-actions"><button class="button primary" data-action="open-card-center" data-card-id="${esc(card.id)}">Ver fatura e parcelas</button></div></article>`;
+  }).join('');
+
+  const manualAccountCards = state.accounts.map(account => `<article class="card account-card"><div class="card-header"><div><h2 class="card-title">${esc(account.name)}</h2><p class="card-note">${esc(account.type)}${account.institution ? ` · ${esc(account.institution)}` : ''} · Manual</p></div><div class="row-actions"><button class="icon-button" data-action="edit-account" data-id="${account.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-account" data-id="${account.id}" aria-label="Excluir">×</button></div></div><div class="account-balance ${accountBalance(account.id) >= 0 ? 'positive' : 'negative'}">${money.format(accountBalance(account.id))}</div><div class="card-note">Saldo inicial: ${money.format(account.initialBalance)}</div></article>`).join('');
+
+  const manualCardHtml = manualCards.map(card => {
+    const invoice = v2CardMonthTotal(card.id, ui.month);
+    const available = card.limit == null ? null : card.limit - invoice;
+    const percent = card.limit ? clamp((invoice / card.limit) * 100, 0, 100) : 0;
+    return `<article class="card credit-card v2-credit-card"><div class="card-header"><div><div class="card-brand">${esc(card.brand || 'Cartão')} · MANUAL</div><h2 class="card-title">${esc(card.name)}</h2></div><div class="row-actions"><button class="icon-button" data-action="edit-card" data-id="${card.id}" aria-label="Editar">✎</button><button class="icon-button" data-action="delete-card" data-id="${card.id}" aria-label="Excluir">×</button></div></div><div class="card-limit">${money.format(invoice)}</div><div class="card-note">Compras de ${esc(formatMonthShort(ui.month))}</div>${card.limit ? `<div class="progress-row" style="margin-top:16px"><div class="progress-meta"><span>Limite disponível</span><strong class="${available < 0 ? 'negative' : ''}">${money.format(available)}</strong></div><div class="progress ${percent >= 100 ? 'danger' : percent >= 80 ? 'warning' : ''}"><span style="width:${percent}%"></span></div></div>` : ''}<div class="v2-card-actions"><button class="button primary" data-action="open-card-center" data-card-id="${esc(card.id)}">Ver fatura e parcelas</button></div></article>`;
+  }).join('');
+
+  const openInvestmentCards = pluggyInvestments.map(investment => {
+    const balance = num(investment.balance);
+    const original = investment.amount_original == null ? null : num(investment.amount_original);
+    const withdrawal = investment.amount_withdrawal == null ? null : num(investment.amount_withdrawal);
+    const dueDate = simpleDate(investment.due_date);
+    const status = investmentStatusInfo(investment.status);
+    const institution = institutionForItem(investment.pluggy_item_id);
+    const subtype = investmentSubtypeLabel(investment.subtype || investment.type);
+    return `<article class="card investment-card"><div class="card-header"><div><div class="card-brand">INVESTIMENTO · OPEN FINANCE</div><h2 class="card-title">${esc(investment.name || subtype || 'Investimento')}</h2><p class="card-note">${esc(institution)}${subtype ? ` · ${esc(subtype)}` : ''}</p></div><span class="chip ${status.tone}">${esc(status.label)}</span></div><div class="investment-balance ${balance >= 0 ? 'positive' : 'negative'}">${money.format(balance)}</div><div class="card-note">Saldo atual informado pela instituição</div><div class="investment-details">${original != null ? `<div><span>Valor aplicado</span><strong>${money.format(original)}</strong></div>` : ''}${withdrawal != null ? `<div><span>Disponível para resgate</span><strong>${money.format(withdrawal)}</strong></div>` : ''}${investment.issuer ? `<div><span>Emissor</span><strong>${esc(investment.issuer)}</strong></div>` : ''}${dueDate ? `<div><span>Vencimento</span><strong>${shortDate.format(parseDate(dueDate))}</strong></div>` : ''}</div></article>`;
+  }).join('');
+
+  const financeSummary = pluggyDataLoading
+    ? `<div class="open-finance-empty"><span class="spinner-dot"></span> Atualizando dados financeiros…</div>`
+    : (pluggyAccounts.length || pluggyInvestments.length)
+      ? `<div class="open-finance-summary"><span><strong>${pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'BANK').length}</strong> contas</span><span><strong>${importedCards.length}</strong> cartões</span><span><strong>${pluggyInvestments.length}</strong> investimentos · ${money.format(totalInvestmentBalance())}</span><span><strong>${pluggyTransactions.length}</strong> movimentações armazenadas</span></div>`
+      : '';
+
+  const content = `<section class="card open-finance-card"><div class="card-header open-finance-header"><div><div class="open-finance-kicker">OPEN FINANCE · PLUGGY</div><h2 class="card-title">Bancos conectados</h2><p class="card-note">Atualize as instituições e acompanhe a posição financeira importada.</p></div><div class="open-finance-actions"><button class="button" data-action="refresh-open-finance">↻ Atualizar bancos</button><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button></div></div>${renderPluggyConnections()}${financeSummary}</section>
+    <section class="v2-patrimony-highlight" style="margin-top:26px"><div class="card-header"><div><h2 class="card-title">Central de cartões</h2><p class="card-note">Faturas, compras por mês, limite e parcelas futuras.</p></div></div><div class="grid three">${importedCardHtml || manualCardHtml ? importedCardHtml + manualCardHtml : empty('Nenhum cartão disponível.')}</div></section>
+    <section style="margin-top:26px"><div class="card-header"><div><h2 class="card-title">Contas Open Finance</h2><p class="card-note">Saldos atuais informados pelas instituições conectadas.</p></div></div><div class="grid three">${openBankCards || empty(pluggyDataLoading ? 'Carregando contas…' : 'Nenhuma conta bancária importada.')}</div></section>
+    <section style="margin-top:26px"><div class="card-header investment-section-header"><div><h2 class="card-title">Investimentos Open Finance</h2><p class="card-note">Posição atual dos ativos informada pelas instituições conectadas.</p></div>${pluggyInvestments.length ? `<div class="investment-summary"><span>Patrimônio investido</span><strong>${money.format(totalInvestmentBalance())}</strong></div>` : ''}</div><div class="grid three">${openInvestmentCards || empty(pluggyDataLoading ? 'Carregando investimentos…' : 'Nenhum investimento importado.')}</div></section>
+    <section style="margin-top:26px"><div class="card-header"><div><h2 class="card-title">Contas manuais</h2><p class="card-note">Para contas que não estão conectadas ao Open Finance.</p></div><button class="button primary" data-action="add-account">+ Conta</button></div><div class="grid three">${manualAccountCards || empty('Nenhuma conta manual cadastrada.')}</div></section>
+    <section style="margin-top:26px"><div class="card-header"><div><h2 class="card-title">Cadastrar cartão manual</h2><p class="card-note">Use para cartões fora do Open Finance.</p></div><button class="button primary" data-action="add-card">+ Cartão</button></div>${manualCards.length ? `<p class="card-note">Os cartões manuais já aparecem na Central de cartões acima.</p>` : empty('Nenhum cartão manual cadastrado.')}</section>`;
+  return pageShell(content);
+}
+
+function v2TxSourceId(tx) {
+  return tx.cardId || tx.accountId || tx.sourceLabel || 'sem-origem';
+}
+
+function v2TxSourceLabel(tx) {
+  if (tx.origin === 'openfinance') return tx.sourceLabel || 'Open Finance';
+  if (tx.type === 'card') return nameById(state.cards, tx.cardId, 'Cartão manual');
+  return nameById(state.accounts, tx.accountId, 'Conta manual');
+}
+
+function v2ModeDate(tx, mode = ui.reportMode) {
+  return mode === 'consumption' ? consumptionDate(tx) : cashFlowDate(tx);
+}
+
+function v2ModeCandidate(tx, mode = ui.reportMode) {
+  if (mode === 'consumption') return tx.type === 'expense' || tx.type === 'card';
+  return ['income', 'expense', 'card_payment'].includes(tx.type) && Boolean(tx.accountId);
+}
+
+function v2ReportBaseRows(range = reportRangeBounds(), mode = ui.reportMode) {
+  return allTransactions().filter(tx => {
+    if (!v2ModeCandidate(tx, mode)) return false;
+    const key = dateKey(v2ModeDate(tx, mode));
+    return key && key >= range.start && key <= range.end;
+  });
+}
+
+function v2ReportRows(range = reportRangeBounds(), mode = ui.reportMode) {
+  const search = normalizeSearchText(ui.reportSearchV2 || '');
+  return v2ReportBaseRows(range, mode).filter(tx => {
+    if (ui.reportSource !== 'all' && v2TxSourceId(tx) !== ui.reportSource) return false;
+    if (ui.reportCategory !== 'all' && localizedCategory(tx.category) !== ui.reportCategory) return false;
+    if (ui.reportSubcategory !== 'all' && String(tx.subcategory || 'Sem subcategoria') !== ui.reportSubcategory) return false;
+    if (ui.reportMember !== 'all' && String(tx.member || 'Sem membro') !== ui.reportMember) return false;
+    if (ui.reportStatus !== 'all' && tx.status !== ui.reportStatus) return false;
+    if (ui.reportOrigin !== 'all' && tx.origin !== ui.reportOrigin) return false;
+    if (ui.reportTypeV2 !== 'all' && tx.type !== ui.reportTypeV2) return false;
+    if (search) {
+      const haystack = normalizeSearchText([tx.description, localizedCategory(tx.category), tx.subcategory, tx.member, ...(tx.tags || []), v2TxSourceLabel(tx)].join(' '));
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+}
+
+function v2CalculatedRows(rows, mode = ui.reportMode) {
+  return rows.filter(tx => {
+    if (!validForCalculations(tx)) return false;
+    if (mode === 'cash') return tx.status === 'confirmed';
+    if (tx.type === 'expense') return tx.status === 'confirmed';
+    if (tx.type === 'card') return tx.status === 'confirmed' || tx.status === 'pending';
+    return false;
+  });
+}
+
+function v2ReportMetrics(range = reportRangeBounds(), mode = ui.reportMode) {
+  const rawRows = v2ReportRows(range, mode);
+  const rows = v2CalculatedRows(rawRows, mode);
+  if (mode === 'cash') {
+    const income = rows.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + num(tx.amount), 0);
+    const direct = rows.filter(tx => tx.type === 'expense').reduce((sum, tx) => sum + num(tx.amount), 0);
+    const cards = rows.filter(tx => tx.type === 'card_payment').reduce((sum, tx) => sum + num(tx.amount), 0);
+    return { rawRows, rows, income, direct, cards, outflow: direct + cards, variation: income - direct - cards, total: direct + cards, pending: 0 };
+  }
+  const direct = rows.filter(tx => tx.type === 'expense').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const cards = rows.filter(tx => tx.type === 'card').reduce((sum, tx) => sum + num(tx.amount), 0);
+  const pending = rows.filter(tx => tx.type === 'card' && tx.status === 'pending').reduce((sum, tx) => sum + num(tx.amount), 0);
+  return { rawRows, rows, income: 0, direct, cards, outflow: 0, variation: 0, total: direct + cards, pending };
+}
+
+function v2ReportCategoryTotals(range = reportRangeBounds(), mode = ui.reportMode) {
+  const rows = v2ReportMetrics(range, mode).rows.filter(tx => mode === 'cash' ? tx.type === 'expense' : ['expense', 'card'].includes(tx.type));
+  const map = new Map();
+  rows.forEach(tx => {
+    const category = localizedCategory(tx.category);
+    map.set(category, (map.get(category) || 0) + num(tx.amount));
+  });
+  return [...map.entries()].map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
+}
+
+function v2RangeComparisons(range = reportRangeBounds()) {
+  const start = parseDate(range.start);
+  const end = parseDate(range.end);
+  const days = start && end ? Math.max(1, Math.round((end - start) / 86400000) + 1) : 30;
+  const previousEnd = shiftDateDays(range.start, -1);
+  const previousStart = shiftDateDays(previousEnd, -(days - 1));
+  return {
+    previous: { start: previousStart, end: previousEnd, preset: 'comparison' },
+    yearAgo: { start: shiftDateMonths(range.start, -12), end: shiftDateMonths(range.end, -12), preset: 'comparison' }
+  };
+}
+
+function v2PctChange(current, previous) {
+  if (Math.abs(previous) < 0.005) return Math.abs(current) < 0.005 ? 0 : null;
+  return ((current - previous) / Math.abs(previous)) * 100;
+}
+
+function v2PctText(value) {
+  if (value == null || !Number.isFinite(value)) return 'sem base';
+  return `${value > 0 ? '+' : ''}${value.toFixed(1).replace('.', ',')}%`;
+}
+
+function v2ReportMonthlySeries(range = reportRangeBounds(), mode = ui.reportMode) {
+  const rows = v2ReportMetrics(range, mode).rows;
+  const grouped = new Map();
+  rows.forEach(tx => {
+    const key = dateKey(v2ModeDate(tx, mode)).slice(0, 7);
+    if (!key) return;
+    if (!grouped.has(key)) grouped.set(key, { a: 0, b: 0 });
+    const bucket = grouped.get(key);
+    if (mode === 'cash') {
+      if (tx.type === 'income') bucket.a += num(tx.amount);
+      if (tx.type === 'expense' || tx.type === 'card_payment') bucket.b += num(tx.amount);
+    } else {
+      if (tx.type === 'expense') bucket.a += num(tx.amount);
+      if (tx.type === 'card') bucket.b += num(tx.amount);
+    }
+  });
+  const months = [];
+  let key = range.start.slice(0, 7);
+  const last = range.end.slice(0, 7);
+  let safety = 0;
+  while (key <= last && safety < 120) {
+    const bucket = grouped.get(key) || { a: 0, b: 0 };
+    months.push({ key, ...bucket, total: bucket.a + bucket.b });
+    key = shiftMonth(key, 1);
+    safety++;
+  }
+  return months;
+}
+
+function v2UniqueOptions(rows, getter) {
+  return [...new Set(rows.map(getter).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), 'pt-BR'));
+}
+
+function v2SelectOptions(values, current, allLabel) {
+  return `<option value="all">${esc(allLabel)}</option>${values.map(value => `<option value="${esc(value)}" ${value === current ? 'selected' : ''}>${esc(value)}</option>`).join('')}`;
+}
+
+function v2ReportFilterCount() {
+  return ['reportSource','reportCategory','reportSubcategory','reportMember','reportStatus','reportOrigin','reportTypeV2']
+    .filter(key => ui[key] && ui[key] !== 'all').length + (ui.reportSearchV2 ? 1 : 0);
+}
+
+function v2ReportCategoryDetails(category) {
+  const range = reportRangeBounds();
+  const rows = v2ReportMetrics(range, ui.reportMode).rows
+    .filter(tx => localizedCategory(tx.category) === category)
+    .sort((a, b) => (v2ModeDate(b, ui.reportMode) || '').localeCompare(v2ModeDate(a, ui.reportMode) || ''));
+  const total = rows.reduce((sum, tx) => sum + num(tx.amount), 0);
+  const body = `<div class="category-detail-summary"><div><span>Total da categoria</span><strong>${money.format(total)}</strong></div><div><span>Movimentações</span><strong>${rows.length}</strong></div><div><span>Modo</span><strong>${ui.reportMode === 'cash' ? 'Caixa' : 'Consumo'}</strong></div><div><span>Período</span><strong>${esc(reportRangeLabel(range))}</strong></div></div><div class="category-detail-list">${rows.length ? rows.map(tx => renderTransactionRow(tx)).join('') : empty('Nenhuma movimentação encontrada.')}</div>`;
+  openInfoModal(category, body);
+}
+
+function openReportCategoryDetails(category) {
+  v2ReportCategoryDetails(category);
+}
+
+function renderReports() {
+  const range = reportRangeBounds();
+  const periodLabel = reportRangeLabel(range);
+  const mode = ui.reportMode === 'consumption' ? 'consumption' : 'cash';
+  const metrics = v2ReportMetrics(range, mode);
+  const categories = v2ReportCategoryTotals(range, mode);
+  const series = v2ReportMonthlySeries(range, mode);
+  const comparisons = v2RangeComparisons(range);
+  const previous = v2ReportMetrics(comparisons.previous, mode);
+  const yearAgo = v2ReportMetrics(comparisons.yearAgo, mode);
+  const compareMetric = mode === 'cash' ? metrics.outflow : metrics.total;
+  const previousMetric = mode === 'cash' ? previous.outflow : previous.total;
+  const yearMetric = mode === 'cash' ? yearAgo.outflow : yearAgo.total;
+  const comparePrevious = v2PctChange(compareMetric, previousMetric);
+  const compareYear = v2PctChange(compareMetric, yearMetric);
+  const maxCategory = Math.max(1, ...categories.map(item => item.total));
+  const maxSeries = Math.max(1, ...series.flatMap(item => [item.a, item.b]));
+  const baseRows = v2ReportBaseRows(range, mode);
+  const sourcesMap = new Map();
+  baseRows.forEach(tx => sourcesMap.set(v2TxSourceId(tx), v2TxSourceLabel(tx)));
+  const categoriesOptions = v2UniqueOptions(baseRows, tx => localizedCategory(tx.category));
+  const subcategoryOptions = v2UniqueOptions(baseRows, tx => tx.subcategory || 'Sem subcategoria');
+  const memberOptions = v2UniqueOptions(baseRows, tx => tx.member || 'Sem membro');
+  const sourceOptions = [...sourcesMap.entries()].sort((a, b) => a[1].localeCompare(b[1], 'pt-BR'));
+  const topCategory = categories[0];
+  const largest = [...metrics.rows].filter(tx => mode === 'cash' ? tx.type !== 'income' : true).sort((a, b) => num(b.amount) - num(a.amount))[0];
+  const ignored = baseRows.filter(tx => tx.status === 'ignored').length;
+  const pendingRaw = baseRows.filter(tx => tx.status === 'pending').length;
+  const uncategorized = baseRows.filter(tx => localizedCategory(tx.category) === 'Sem categoria').length;
+  const filterCount = v2ReportFilterCount();
+  const presets = [['1m','1 mês'],['3m','3 meses'],['6m','6 meses'],['12m','12 meses'],['all','Todo histórico'],['custom','Personalizado']];
+  const customRange = ui.reportRange === 'custom' ? `<div class="report-custom-range"><div class="field"><label>Data inicial</label><input class="input" id="report-start" type="date" value="${esc(range.start)}"></div><div class="field"><label>Data final</label><input class="input" id="report-end" type="date" value="${esc(range.end)}"></div></div>` : '';
+  const typeOptions = mode === 'cash'
+    ? [['all','Todos os tipos'],['income','Entradas'],['expense','Gastos em conta'],['card_payment','Faturas liquidadas']]
+    : [['all','Todos os tipos'],['expense','Gastos em conta'],['card','Compras no cartão']];
+
+  const content = `<section class="v2-report-header card">
+      <div class="v2-report-title-row"><div><div class="open-finance-kicker">RELATÓRIOS 2.0</div><h2>Entenda o dinheiro por duas perspectivas</h2><p>Caixa mostra quando o dinheiro entrou ou saiu da conta. Consumo mostra quando o gasto aconteceu, incluindo compras pendentes do cartão.</p></div><div class="v2-report-mode"><button class="${mode === 'cash' ? 'active' : ''}" data-action="report-mode-v2" data-mode="cash"><span>⇄</span><strong>Caixa</strong><small>movimento bancário</small></button><button class="${mode === 'consumption' ? 'active' : ''}" data-action="report-mode-v2" data-mode="consumption"><span>🛒</span><strong>Consumo</strong><small>quando você gastou</small></button></div></div>
+      <div class="report-period-presets v2-period-presets">${presets.map(([value,label]) => `<button class="button small report-period-button ${ui.reportRange === value ? 'primary active' : ''}" data-action="report-period" data-period="${value}">${label}</button>`).join('')}</div>${customRange}
+    </section>
+
+    <section class="card v2-filter-card" style="margin-top:16px"><div class="card-header"><div><h2 class="card-title">Filtros avançados</h2><p class="card-note">Combine conta/cartão, categoria, status, origem e outros campos.</p></div><div class="row-actions">${filterCount ? `<span class="chip pending">${filterCount} ativos</span>` : '<span class="chip confirmed">Sem filtros</span>'}<button class="button small" data-action="report-reset-v2">Limpar</button></div></div><div class="v2-filter-grid">
+      <div class="field v2-filter-search"><label>Buscar</label><input class="input" id="v2-report-search" placeholder="Descrição, tag, categoria..." value="${esc(ui.reportSearchV2)}"></div>
+      <div class="field"><label>Conta / cartão</label><select class="select" id="v2-report-source"><option value="all">Todas as origens</option>${sourceOptions.map(([value,label]) => `<option value="${esc(value)}" ${ui.reportSource === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></div>
+      <div class="field"><label>Tipo</label><select class="select" id="v2-report-type">${typeOptions.map(([value,label]) => `<option value="${value}" ${ui.reportTypeV2 === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+      <div class="field"><label>Categoria</label><select class="select" id="v2-report-category">${v2SelectOptions(categoriesOptions, ui.reportCategory, 'Todas as categorias')}</select></div>
+      <div class="field"><label>Subcategoria</label><select class="select" id="v2-report-subcategory">${v2SelectOptions(subcategoryOptions, ui.reportSubcategory, 'Todas as subcategorias')}</select></div>
+      <div class="field"><label>Membro</label><select class="select" id="v2-report-member">${v2SelectOptions(memberOptions, ui.reportMember, 'Todos os membros')}</select></div>
+      <div class="field"><label>Situação</label><select class="select" id="v2-report-status">${selectOptions([['all','Todas'],['confirmed','Confirmadas'],['pending','Pendentes'],['ignored','Ignoradas']], ui.reportStatus)}</select></div>
+      <div class="field"><label>Origem</label><select class="select" id="v2-report-origin">${selectOptions([['all','Todas'],['openfinance','Open Finance'],['manual','Manual']], ui.reportOrigin)}</select></div>
+    </div></section>
+
+    ${mode === 'cash' ? `<section class="grid kpis report-kpis v2-report-kpis" style="margin-top:16px"><article class="card"><div class="kpi-label">Entradas no caixa</div><div class="kpi-value positive">${money.format(metrics.income)}</div><div class="kpi-meta">Recebimentos efetivos</div></article><article class="card"><div class="kpi-label">Gastos em conta</div><div class="kpi-value negative">${money.format(metrics.direct)}</div><div class="kpi-meta">PIX, débito e pagamentos diretos</div></article><article class="card"><div class="kpi-label">Faturas liquidadas</div><div class="kpi-value">${money.format(metrics.cards)}</div><div class="kpi-meta">Saída de caixa sem novo consumo</div></article><article class="card report-variation-card"><div class="kpi-label">Variação do caixa</div><div class="kpi-value ${metrics.variation >= 0 ? 'positive' : 'warning'}">${metrics.variation >= 0 ? '+' : '−'}${money.format(Math.abs(metrics.variation))}</div><div class="kpi-meta">Não representa saldo negativo</div></article></section>` : `<section class="grid kpis report-kpis v2-report-kpis" style="margin-top:16px"><article class="card"><div class="kpi-label">Consumo total</div><div class="kpi-value negative">${money.format(metrics.total)}</div><div class="kpi-meta">Gastos + compras no cartão</div></article><article class="card"><div class="kpi-label">Gastos em conta</div><div class="kpi-value negative">${money.format(metrics.direct)}</div><div class="kpi-meta">Despesas confirmadas</div></article><article class="card"><div class="kpi-label">Compras no cartão</div><div class="kpi-value">${money.format(metrics.cards)}</div><div class="kpi-meta">Confirmadas e pendentes</div></article><article class="card"><div class="kpi-label">Pendente no cartão</div><div class="kpi-value warning">${money.format(metrics.pending)}</div><div class="kpi-meta">Já entra no consumo</div></article></section>`}
+
+    <section class="grid two v2-report-comparison-grid" style="margin-top:16px"><article class="card v2-comparison-card"><div class="card-header"><div><h2 class="card-title">Comparação do período</h2><p class="card-note">${mode === 'cash' ? 'Saídas efetivas' : 'Consumo'} · ${esc(periodLabel)}</p></div></div><div class="v2-comparison-main"><div><small>Período atual</small><strong>${money.format(compareMetric)}</strong></div><div><small>Período anterior</small><strong>${money.format(previousMetric)}</strong><span class="${comparePrevious != null && comparePrevious > 0 ? 'negative' : 'positive'}">${v2PctText(comparePrevious)}</span></div><div><small>Mesmo período há 1 ano</small><strong>${money.format(yearMetric)}</strong><span class="${compareYear != null && compareYear > 0 ? 'negative' : 'positive'}">${v2PctText(compareYear)}</span></div></div></article><article class="card v2-insight-card"><div class="card-header"><div><h2 class="card-title">Leituras rápidas</h2><p class="card-note">Sinais úteis a partir dos filtros atuais.</p></div></div><div class="v2-insight-list"><div><span>Maior movimentação</span><strong>${largest ? `${esc(largest.description)} · ${money.format(largest.amount)}` : '—'}</strong></div><div><span>Maior categoria</span><strong>${topCategory ? `${esc(topCategory.category)} · ${money.format(topCategory.total)}` : '—'}</strong></div><div><span>Média mensal</span><strong>${money.format(compareMetric / Math.max(1, series.length))}</strong></div><div><span>Registros no filtro</span><strong>${metrics.rawRows.length}</strong></div></div></article></section>
+
+    <section class="grid two" style="margin-top:16px"><article class="card"><div class="card-header"><div><h2 class="card-title">${mode === 'cash' ? 'Gastos em conta por categoria' : 'Distribuição do consumo'}</h2><p class="card-note">Clique em uma categoria para abrir as movimentações.</p></div></div>${categories.length ? `<div class="chart v2-category-chart">${categories.slice(0, 12).map(item => `<button class="chart-row chart-row-button" data-action="report-category-details" data-category="${esc(item.category)}"><div class="chart-label">${esc(item.category)}</div><div class="chart-track"><div class="chart-bar" style="width:${(item.total / maxCategory) * 100}%"></div></div><div class="chart-value">${money.format(item.total)}</div></button>`).join('')}</div>` : empty('Sem dados para distribuir com os filtros atuais.')}</article><article class="card"><div class="card-header"><div><h2 class="card-title">Qualidade dos dados</h2><p class="card-note">Registros que merecem revisão antes de confiar no relatório.</p></div></div><div class="stack"><div class="list-row"><span>Pendentes no universo filtrável</span><strong class="${pendingRaw ? 'warning' : 'positive'}">${pendingRaw}</strong></div><div class="list-row"><span>Ignoradas</span><strong>${ignored}</strong></div><div class="list-row"><span>Sem categoria</span><strong class="${uncategorized ? 'warning' : 'positive'}">${uncategorized}</strong></div><div class="list-row"><span>Registros considerados no cálculo</span><strong>${metrics.rows.length}</strong></div><div class="list-row"><span>Modo financeiro</span><strong>${mode === 'cash' ? 'Caixa' : 'Consumo'}</strong></div></div></article></section>
+
+    <article class="card" style="margin-top:16px"><div class="card-header"><div><h2 class="card-title">${mode === 'cash' ? 'Evolução do caixa' : 'Evolução do consumo'}</h2><p class="card-note">${mode === 'cash' ? 'Entradas x saídas efetivas' : 'Gastos em conta x compras no cartão'} · ${esc(periodLabel)}</p></div></div><div class="chart report-flow-chart v2-flow-chart">${series.map(item => `<div class="chart-row"><div class="chart-label">${esc(formatMonthShort(item.key))}</div><div><div class="chart-track" title="${mode === 'cash' ? 'Entradas' : 'Gastos em conta'}"><div class="chart-bar" style="width:${(item.a / maxSeries) * 100}%"></div></div><div class="chart-track" title="${mode === 'cash' ? 'Saídas' : 'Compras no cartão'}" style="margin-top:5px"><div class="chart-bar v2-secondary-bar" style="width:${(item.b / maxSeries) * 100}%"></div></div></div><div class="chart-value">${money.format(mode === 'cash' ? item.a - item.b : item.total)}</div></div>`).join('')}</div></article>
+
+    <article class="card v2-report-transactions" style="margin-top:16px"><div class="card-header"><div><h2 class="card-title">Movimentações do relatório</h2><p class="card-note">Audite diretamente os registros que correspondem aos filtros selecionados.</p></div><span class="chip confirmed">${metrics.rawRows.length} registros</span></div><div>${metrics.rawRows.length ? metrics.rawRows.slice().sort((a,b) => (v2ModeDate(b,mode)||'').localeCompare(v2ModeDate(a,mode)||'')).slice(0,50).map(tx => renderTransactionRow(tx)).join('') : empty('Nenhuma movimentação encontrada.')}</div>${metrics.rawRows.length > 50 ? `<p class="card-note v2-report-limit-note">Mostrando as 50 movimentações mais recentes. O CSV inclui todas as ${metrics.rawRows.length}.</p>` : ''}</article>
+
+    <article class="card" style="margin-top:16px"><div class="card-header"><div><h2 class="card-title">Exportação</h2><p class="card-note">As exportações respeitam período, modo e filtros da tela.</p></div></div><div class="toolbar"><button class="button primary" data-action="export-report-csv">Exportar movimentações filtradas</button><button class="button" data-action="export-v2-summary">Exportar resumo do relatório</button><button class="button" data-action="export-csv">Exportar tudo</button><button class="button" data-action="backup-json">Backup JSON</button></div></article>`;
+  return pageShell(content);
+}
+
+function exportReportCsv() {
+  const range = reportRangeBounds();
+  const rows = v2ReportRows(range, ui.reportMode);
+  const suffix = `${ui.reportMode}-${range.start}-a-${range.end}`;
+  exportTransactionsCsv(rows, `meu-financeiro-relatorio-${suffix}.csv`, `CSV gerado com ${rows.length} movimentações e os filtros atuais.`);
+}
+
+function exportV2SummaryCsv() {
+  const range = reportRangeBounds();
+  const mode = ui.reportMode;
+  const metrics = v2ReportMetrics(range, mode);
+  const categories = v2ReportCategoryTotals(range, mode);
+  const series = v2ReportMonthlySeries(range, mode);
+  const q = value => `"${String(value ?? '').replaceAll('"','""')}"`;
+  const lines = [];
+  lines.push(['Meu Financeiro','Relatório 2.0'].map(q).join(';'));
+  lines.push(['Modo', mode === 'cash' ? 'Caixa' : 'Consumo'].map(q).join(';'));
+  lines.push(['Período', `${range.start} a ${range.end}`].map(q).join(';'));
+  lines.push([]);
+  lines.push(['RESUMO','Indicador','Valor'].map(q).join(';'));
+  if (mode === 'cash') {
+    [['Resumo','Entradas',metrics.income],['Resumo','Gastos em conta',metrics.direct],['Resumo','Faturas liquidadas',metrics.cards],['Resumo','Variação do caixa',metrics.variation]].forEach(row => lines.push(row.map(q).join(';')));
+  } else {
+    [['Resumo','Consumo total',metrics.total],['Resumo','Gastos em conta',metrics.direct],['Resumo','Compras no cartão',metrics.cards],['Resumo','Pendente no cartão',metrics.pending]].forEach(row => lines.push(row.map(q).join(';')));
+  }
+  lines.push([]);
+  lines.push(['CATEGORIAS','Categoria','Valor'].map(q).join(';'));
+  categories.forEach(item => lines.push(['Categoria', item.category, item.total.toFixed(2).replace('.',',')].map(q).join(';')));
+  lines.push([]);
+  lines.push(['EVOLUÇÃO','Mês', mode === 'cash' ? 'Entradas' : 'Gastos em conta', mode === 'cash' ? 'Saídas' : 'Compras no cartão', 'Total/Variação'].map(q).join(';'));
+  series.forEach(item => lines.push(['Mês', item.key, item.a.toFixed(2).replace('.',','), item.b.toFixed(2).replace('.',','), (mode === 'cash' ? item.a - item.b : item.total).toFixed(2).replace('.',',')].map(q).join(';')));
+  downloadBlob(`meu-financeiro-resumo-${mode}-${range.start}-a-${range.end}.csv`, '\ufeff' + lines.join('\n'), 'text/csv;charset=utf-8');
+  showToast('Resumo do relatório exportado.', { tone: 'success' });
+}
+
+function v2ResetReportFilters() {
+  ui.reportSource = 'all';
+  ui.reportCategory = 'all';
+  ui.reportSubcategory = 'all';
+  ui.reportMember = 'all';
+  ui.reportStatus = 'all';
+  ui.reportOrigin = 'all';
+  ui.reportTypeV2 = 'all';
+  ui.reportSearchV2 = '';
+}
+
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+  const action = button.dataset.action;
+  if (action === 'open-card-center') {
+    openV2CardCenter(button.dataset.cardId || '', ui.month);
+    return;
+  }
+  if (action === 'card-center-month') {
+    openV2CardCenter(button.dataset.cardId || '', button.dataset.month || ui.month);
+    return;
+  }
+  if (action === 'report-mode-v2') {
+    ui.reportMode = button.dataset.mode === 'consumption' ? 'consumption' : 'cash';
+    ui.reportTypeV2 = 'all';
+    ui.reportStatus = 'all';
+    render();
+    return;
+  }
+  if (action === 'report-reset-v2') {
+    v2ResetReportFilters();
+    render();
+    return;
+  }
+  if (action === 'export-v2-summary') {
+    exportV2SummaryCsv();
+  }
+});
+
+document.addEventListener('change', event => {
+  const map = {
+    'v2-report-source': 'reportSource',
+    'v2-report-type': 'reportTypeV2',
+    'v2-report-category': 'reportCategory',
+    'v2-report-subcategory': 'reportSubcategory',
+    'v2-report-member': 'reportMember',
+    'v2-report-status': 'reportStatus',
+    'v2-report-origin': 'reportOrigin'
+  };
+  const key = map[event.target.id];
+  if (key) {
+    ui[key] = event.target.value;
+    render();
+  }
+});
+
+document.addEventListener('input', event => {
+  if (event.target.id !== 'v2-report-search') return;
+  const value = event.target.value;
+  ui.reportSearchV2 = value;
+  const cursor = event.target.selectionStart ?? value.length;
+  render();
+  const input = document.getElementById('v2-report-search');
+  if (input) {
+    input.focus();
+    try { input.setSelectionRange(cursor, cursor); } catch {}
+  }
 });
 
 initializeApp();
