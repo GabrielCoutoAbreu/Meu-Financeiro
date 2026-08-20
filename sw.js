@@ -1,10 +1,10 @@
-const CACHE = 'meu-financeiro-v1.7.1';
+const CACHE = 'meu-financeiro-v1.8.0';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=1.7.1',
-  './config.js?v=1.7.1',
-  './app.js?v=1.7.1',
+  './styles.css?v=1.8.0',
+  './config.js?v=1.8.0',
+  './app.js?v=1.8.0',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png'

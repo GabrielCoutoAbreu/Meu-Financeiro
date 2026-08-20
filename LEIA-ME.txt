@@ -1,73 +1,49 @@
-MEU FINANCEIRO v1.7.1 — SALDO ATUAL, MOVIMENTAÇÃO DE CAIXA, CONSUMO E PATRIMÔNIO
+MEU FINANCEIRO v1.8.0 — NOVA EXPERIÊNCIA VISUAL
 
-Revisão da lógica financeira do aplicativo:
-- Fluxo de caixa separado do patrimônio: investimentos não entram nas entradas/saídas mensais.
-- Saldo em contas mostra somente recursos bancários, sem investimentos e sem limite de crédito.
-- Patrimônio líquido continua considerando contas + investimentos - cartões em aberto.
-- Compras no cartão entram no consumo e nas categorias na data da compra, mesmo quando PENDING.
-- Pagamento de fatura entra como saída de caixa, mas não é contabilizado novamente como gasto/consumo.
-- Transferências entre contas próprias (PIX/TED/DOC pareados) permanecem neutras no fluxo e no consumo.
-- Regra pessoal: "TED CONTA SALARIO GABRIEL COUTO DE ABREU" é classificada como Salário / Entrada em conta.
-- O PIX Santander -> Bradesco pareado entre contas próprias permanece como transferência interna, inclusive quando usado para preparar o pagamento do cartão.
-- Categorias importadas da Pluggy passam a ser exibidas em português.
-- Na Visão geral, "Transações pendentes" é clicável e abre Movimentações já filtradas em Pendentes.
-- Gastos por categoria e orçamentos passam a considerar compras pendentes do cartão, evitando esperar o pagamento da fatura para enxergar o consumo.
-- Relatórios mostram Fluxo de caixa e Consumo separadamente.
-- Na distribuição dos gastos do Relatório, cada categoria é clicável e abre o detalhamento das movimentações do período.
-- Nenhuma alteração de SQL, Supabase, Pluggy ou Edge Functions é necessária.
+Objetivo desta versão:
+- aproximar a experiência de uso dos melhores aplicativos de finanças pessoais, preservando a identidade do Meu Financeiro;
+- manter intactas as regras financeiras consolidadas na v1.7.1;
+- não alterar Supabase, Pluggy, SQL ou Edge Functions.
 
-IMPORTANTE:
-O cheque especial/limite de crédito não é somado ao patrimônio nem ao saldo em contas. Ele continua sendo crédito disponível, não recurso próprio.
+Principais mudanças da v1.8.0:
+- nova Visão Geral com card principal de Saldo disponível em contas;
+- entradas, gastos em conta e faturas liquidadas ficam integrados ao card principal e continuam clicáveis;
+- opção de ocultar os valores do resumo da Visão Geral;
+- resumo rápido de Consumo, Investimentos, Patrimônio líquido e Cartões em aberto;
+- novo gráfico circular de gastos por categoria;
+- categorias passam a ter ícones e identidade visual;
+- categorias do dashboard são clicáveis e abrem as movimentações que compõem o valor;
+- nova seção Meus cartões com fatura atual, limite disponível e vencimento;
+- tela Movimentações reorganizada por dia, com linhas mais compactas e visuais;
+- navegação do iPhone passa a usar Início, Transações, botão central +, Planejar e Mais;
+- menu Mais concentra Contas e cartões, Relatórios e Configurações;
+- cartões e contas receberam acabamento visual mais próximo de um aplicativo financeiro nativo;
+- melhorias específicas de responsividade para iPhone.
+
+REGRAS FINANCEIRAS PRESERVADAS:
+- investimentos não entram no fluxo de caixa mensal;
+- saldo disponível mostra apenas recursos bancários, sem investimentos e sem limite de crédito;
+- patrimônio líquido = contas + investimentos - cartões em aberto;
+- compras no cartão entram no consumo pela data da compra, inclusive quando pendentes;
+- pagamento de fatura é saída de caixa, mas não novo consumo;
+- transferências entre contas próprias permanecem neutras;
+- a regra de salário "TED CONTA SALARIO GABRIEL COUTO DE ABREU" permanece ativa;
+- variação mensal negativa não é apresentada como déficit.
 
 ATUALIZAÇÃO NO GITHUB:
-Substitua app.js, index.html, styles.css, sw.js e LEIA-ME.txt e faça o commit.
+Substitua:
+- app.js
+- index.html
+- styles.css
+- sw.js
+- LEIA-ME.txt
+- manifest.webmanifest
 
-MEU FINANCEIRO v1.6.2 — ATUALIZAÇÃO BANCÁRIA TRANSPARENTE
+config.js, ícones, Supabase e Edge Functions não precisam ser alterados.
 
-Principais mudanças:
-- O botão Open Finance agora tenta primeiro disparar uma coleta bancária real pela Pluggy.
-- Para Items MeuPluggy, quando a API bloqueia a atualização direta, o aplicativo informa isso claramente.
-- Exibe a data da última coleta bancária retornada pela Pluggy, quando disponível.
-- Botão para abrir o MeuPluggy e atualizar Santander/Bradesco por lá.
-- Ao retornar ao Meu Financeiro, os dados são verificados/importados automaticamente.
-- Informa quantas novas movimentações apareceram após a atualização.
-- Se nenhuma nova movimentação estiver disponível, o aplicativo não afirma falsamente que o banco foi atualizado.
-- Mantém contas, cartões, investimentos, relatórios e transferências internas da versão anterior.
-
-REQUISITO:
-A Edge Function pluggy-refresh-items deve permanecer publicada no Supabase com Verify JWT habilitado.
-
-
-MEU FINANCEIRO v1.6.1 — TRANSFERÊNCIAS INTERNAS NEUTRAS
-
-Melhorias desta versão:
-- Transferências entre contas bancárias próprias conectadas pelo Open Finance são reconhecidas automaticamente.
-- PIX, TED, DOC e transferências internas pareadas por valor/data deixam de contar como entrada ou saída.
-- Transferências classificadas como mesma titularidade também são tratadas como movimentação patrimonial interna.
-- Pagamentos de cartão continuam neutros e não duplicam os gastos já registrados no cartão.
-- As movimentações continuam visíveis no histórico e no CSV; apenas deixam de distorcer entradas, saídas, resultado, categorias e gráficos.
-- A tela Relatórios informa quantos registros patrimoniais internos foram desconsiderados do fluxo.
-
-MEU FINANCEIRO v1.6.0 — RELATÓRIOS POR PERÍODO
-
-Atualização da tela Relatórios:
-- filtro rápido por 1, 3, 6 ou 12 meses;
-- opção de todo o histórico disponível;
-- intervalo personalizado por data inicial e final;
-- indicadores de entradas, saídas, resultado e quantidade de movimentações do período;
-- distribuição de gastos por categoria respeitando o período escolhido;
-- qualidade dos dados filtrada pelo mesmo intervalo;
-- evolução mensal de entradas e saídas no período;
-- exportação CSV somente do período selecionado ou de todo o histórico;
-- layout responsivo para iPhone.
-
-Nenhuma alteração de banco de dados, Supabase, Pluggy ou Open Finance é necessária.
-Substitua app.js, index.html, styles.css, sw.js e LEIA-ME.txt no GitHub e faça o commit.
-
-
-AJUSTE v1.7.1
-- Saldo bancário atual passa a ser o indicador principal de disponibilidade.
-- Variação mensal negativa não é mais apresentada como déficit.
+VERSÃO ANTERIOR — v1.7.1
+- Saldo bancário atual como indicador principal.
+- Variação mensal negativa não tratada como déficit.
 - Saídas separadas em gastos pagos pela conta e faturas liquidadas.
-- Cards de entradas, gastos em conta e faturas são clicáveis para auditoria.
-- Relatórios passam a chamar o resultado de Variação do caixa.
+- Cards de entradas, gastos em conta e faturas clicáveis para auditoria.
+- Relatórios usam o termo Variação do caixa.

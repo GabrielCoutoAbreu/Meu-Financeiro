@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 4;
-const RELEASE_VERSION = '1.7.1';
+const RELEASE_VERSION = '1.8.0';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
@@ -250,6 +250,7 @@ function defaultState() {
     preferences: {
       darkMode: false,
       basis: 'cash',
+      hideDashboardValues: false,
       showInstallHelp: true,
       name: 'Meu Financeiro'
     },
@@ -2111,6 +2112,22 @@ document.addEventListener('click', event => {
   const id = button.dataset.id;
   if (action === 'auth-mode') { ui.authMode = button.dataset.mode || 'signin'; ui.authMessage = ''; render(); return; }
   if (action === 'sync-now') { manualSync(); return; }
+  if (action === 'toggle-dashboard-privacy') {
+    state.preferences.hideDashboardValues = !state.preferences.hideDashboardValues;
+    persist();
+    render();
+    return;
+  }
+  if (action === 'more-menu') { openMoreMenu(); return; }
+  if (action === 'more-page') {
+    const targetPage = button.dataset.targetPage || 'dashboard';
+    closeModal();
+    ui.page = targetPage;
+    render();
+    if (ui.page === 'patrimony') Promise.all([loadPluggyItems({ quiet: true }), loadOpenFinanceData({ quiet: true })]).then(() => loadPluggyRemoteStatus({ quiet: true }));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
   if (action === 'connect-bank') { connectBankWithPluggy(); return; }
   if (action === 'refresh-open-finance') { refreshOpenFinance(); return; }
   if (action === 'open-meupluggy-refresh') {
@@ -2983,6 +3000,320 @@ function renderTransactions() {
   return pageShell(content, `<button class="button primary" data-action="add-transaction">＋ <span class="desktop-label">Nova</span></button>`);
 }
 
+
+// ===== v1.8.0 — experiência mobile inspirada em apps financeiros modernos =====
+
+const CATEGORY_VISUALS = {
+  'Alimentação': ['🍔', 'cat-food'],
+  'Moradia': ['⌂', 'cat-home'],
+  'Transporte': ['🚗', 'cat-transport'],
+  'Saúde': ['❤', 'cat-health'],
+  'Educação': ['📚', 'cat-education'],
+  'Lazer': ['🎬', 'cat-leisure'],
+  'Serviços': ['⚙', 'cat-services'],
+  'Dívidas': ['💳', 'cat-debt'],
+  'Taxas': ['%', 'cat-fees'],
+  'Vestuário': ['👕', 'cat-shopping'],
+  'Viagem': ['✈', 'cat-travel'],
+  'Salário': ['💰', 'cat-income'],
+  'Receitas variáveis': ['↗', 'cat-income'],
+  'Investimentos': ['📈', 'cat-investment'],
+  'Presentes': ['🎁', 'cat-gifts'],
+  'Cashback': ['↩', 'cat-income'],
+  'Outros': ['•••', 'cat-other'],
+  'Sem categoria': ['?', 'cat-other'],
+  'Transferência interna': ['⇄', 'cat-transfer'],
+  'Pagamento de cartão': ['✓', 'cat-card']
+};
+
+function categoryVisual(category) {
+  const localized = localizedCategory(category || 'Sem categoria');
+  return { category: localized, icon: CATEGORY_VISUALS[localized]?.[0] || '•', tone: CATEGORY_VISUALS[localized]?.[1] || 'cat-other' };
+}
+
+function dashboardMoney(value) {
+  return state.preferences.hideDashboardValues ? 'R$ ••••••' : money.format(value);
+}
+
+function dashboardSignedMoney(value) {
+  if (state.preferences.hideDashboardValues) return 'R$ ••••••';
+  return `${value >= 0 ? '+' : '−'}${money.format(Math.abs(value))}`;
+}
+
+function renderTransactionRow(tx, actions = false) {
+  const isPositive = tx.type === 'income';
+  const isTransfer = tx.type === 'transfer';
+  const date = transactionViewDate(tx);
+  const source = tx.origin === 'openfinance'
+    ? (tx.sourceLabel || 'Open Finance')
+    : (tx.type === 'card' ? nameById(state.cards, tx.cardId, 'Cartão') : nameById(state.accounts, tx.accountId, 'Sem conta'));
+  const installment = num(tx.installmentTotal) > 1 ? ` · ${tx.installmentCurrent}/${tx.installmentTotal}` : '';
+  const origin = tx.origin === 'openfinance' ? 'Open Finance' : 'Manual';
+  const visual = categoryVisual(tx.category);
+  const valueClass = isTransfer ? 'transfer-value' : isPositive ? 'positive' : 'negative';
+  const sign = isPositive ? '+' : isTransfer ? '' : '−';
+  const canEdit = actions && !tx.readOnly && tx.origin !== 'openfinance';
+
+  return `<div class="list-row transaction-row v18-transaction-row">
+    <div class="row-main transaction-main">
+      <div class="category-avatar ${visual.tone}">${visual.icon}</div>
+      <div class="row-content">
+        <div class="row-title">${esc(tx.description)}</div>
+        <div class="row-subtitle">${esc(visual.category)} · ${esc(source)}${installment}</div>
+        <div class="transaction-meta-mobile">${date ? formatDateBr(date) : 'Sem data'} · ${origin}</div>
+      </div>
+    </div>
+    <div class="row-actions transaction-actions">
+      <div class="row-summary">
+        <div class="row-value ${valueClass}">${sign}${money.format(tx.amount)}</div>
+        <span class="chip ${tx.status}">${tx.status === 'confirmed' ? 'Confirmada' : tx.status === 'pending' ? 'Pendente' : 'Ignorada'}</span>
+      </div>
+      ${canEdit ? `<button class="icon-button transaction-edit-button" data-action="edit-transaction" data-id="${tx.id}" aria-label="Editar">✎</button><button class="icon-button transaction-edit-button" data-action="delete-transaction" data-id="${tx.id}" aria-label="Excluir">×</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function dashboardCategoryDonut(categories, total) {
+  if (!categories.length || total <= 0) return `<div class="donut-empty"><div>Sem gastos</div><small>no período</small></div>`;
+  let acc = 0;
+  const palette = ['var(--chart-1)','var(--chart-2)','var(--chart-3)','var(--chart-4)','var(--chart-5)','var(--chart-6)'];
+  const stops = categories.slice(0, 6).map((item, index) => {
+    const start = acc;
+    acc += (item.total / total) * 100;
+    return `${palette[index % palette.length]} ${start.toFixed(2)}% ${Math.min(acc,100).toFixed(2)}%`;
+  });
+  if (acc < 100) stops.push(`var(--surface-2) ${acc.toFixed(2)}% 100%`);
+  return `<div class="donut-chart" style="--donut:${stops.join(',')}"><div class="donut-center"><small>Consumo</small><strong>${dashboardMoney(total)}</strong></div></div>`;
+}
+
+function dashboardCardsPreview() {
+  const imported = pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'CREDIT').map(account => {
+    const invoice = Math.max(0, num(account.balance));
+    const available = account.available_credit_limit == null ? null : num(account.available_credit_limit);
+    const totalLimit = available == null ? null : Math.max(0, invoice + available);
+    const percent = totalLimit ? clamp((invoice / totalLimit) * 100, 0, 100) : 0;
+    return {
+      name: account.name || 'Cartão',
+      institution: account.institution_name || 'Open Finance',
+      invoice,
+      available,
+      percent,
+      due: simpleDate(account.balance_due_date)
+    };
+  });
+
+  const manual = state.cards.map(card => {
+    const invoice = cardInvoice(card.id);
+    const available = num(card.limit) - invoice;
+    return {
+      name: card.name,
+      institution: card.brand || 'Manual',
+      invoice,
+      available,
+      percent: card.limit ? clamp((invoice / card.limit) * 100, 0, 100) : 0,
+      due: card.dueDay ? `dia ${card.dueDay}` : ''
+    };
+  });
+
+  const cards = [...imported, ...manual].slice(0, 4);
+  if (!cards.length) return empty('Nenhum cartão conectado ou cadastrado.');
+
+  return `<div class="dashboard-card-strip">${cards.map(card => `
+    <article class="mini-credit-card">
+      <div class="mini-card-top"><div><small>${esc(card.institution)}</small><strong>${esc(card.name)}</strong></div><span>▰</span></div>
+      <div class="mini-card-label">Fatura atual</div>
+      <div class="mini-card-invoice">${dashboardMoney(card.invoice)}</div>
+      <div class="mini-card-progress"><span style="width:${card.percent}%"></span></div>
+      <div class="mini-card-footer"><span>Disponível ${card.available == null ? '—' : dashboardMoney(card.available)}</span><span>${card.due ? `Vence ${esc(card.due)}` : ''}</span></div>
+    </article>`).join('')}</div>`;
+}
+
+function renderDashboard() {
+  const cashBreakdown = monthCashFlowBreakdown();
+  const categories = categoryTotals().slice(0, 6);
+  const consumption = monthConsumptionTotal();
+  const pendingCard = monthPendingCardTotal();
+  const bankCash = totalBankCashBalance();
+  const investments = totalInvestmentBalance();
+  const cardDebt = totalCreditDebt();
+  const netWorth = totalNetWorth();
+  const budgets = state.budgets.filter(item => item.month === ui.month).slice(0, 4);
+  const recent = monthTransactions()
+    .sort((a, b) => (transactionViewDate(b) || '').localeCompare(transactionViewDate(a) || ''))
+    .slice(0, 5);
+  const pendingRows = monthPendingTransactions();
+  const pending = pendingRows.reduce((sum, tx) => sum + num(tx.amount), 0);
+  const gettingStarted = state.accounts.length === 0 && state.transactions.length === 0 && pluggyAccounts.length === 0 && pluggyInvestments.length === 0 ? `
+    <article class="card getting-started" style="margin-bottom:16px">
+      <div class="card-header"><div><h2 class="card-title">Comece por aqui</h2><p class="card-note">Cadastre contas manualmente ou conecte seu banco pelo Open Finance.</p></div></div>
+      <div class="toolbar"><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button><button class="button" data-action="add-account">+ Conta manual</button></div>
+    </article>` : '';
+
+  const categoryRows = categories.map((item, index) => {
+    const visual = categoryVisual(item.category);
+    const pct = consumption ? (item.total / consumption) * 100 : 0;
+    return `<button class="category-summary-row" data-action="dashboard-category-details" data-category="${esc(visual.category)}">
+      <span class="category-avatar ${visual.tone}">${visual.icon}</span>
+      <span class="category-summary-main"><strong>${esc(visual.category)}</strong><small>${pct.toFixed(0)}% do consumo</small></span>
+      <span class="category-summary-value">${dashboardMoney(item.total)}</span>
+    </button>`;
+  }).join('');
+
+  const content = `
+    ${gettingStarted}
+    <section class="balance-hero">
+      <div class="balance-hero-top">
+        <div><span class="eyebrow">Saldo disponível em contas</span><h2>${dashboardMoney(bankCash)}</h2><p>Seu dinheiro disponível hoje, sem investimentos e sem limite de crédito.</p></div>
+        <button class="privacy-button" data-action="toggle-dashboard-privacy" aria-label="${state.preferences.hideDashboardValues ? 'Mostrar valores do resumo' : 'Ocultar valores do resumo'}">${state.preferences.hideDashboardValues ? '◉' : '◌'}</button>
+      </div>
+      <div class="balance-flow">
+        <button data-action="cash-details" data-kind="income"><span class="flow-icon income">↓</span><span><small>Entradas</small><strong>${dashboardMoney(cashBreakdown.income)}</strong></span></button>
+        <button data-action="cash-details" data-kind="direct"><span class="flow-icon expense">↑</span><span><small>Gastos em conta</small><strong>${dashboardMoney(cashBreakdown.directExpenses)}</strong></span></button>
+        <button data-action="cash-details" data-kind="cards"><span class="flow-icon card">▰</span><span><small>Faturas</small><strong>${dashboardMoney(cashBreakdown.cardPayments)}</strong></span></button>
+      </div>
+      <div class="balance-variation">
+        <span>Variação do saldo em ${esc(formatMonthShort(ui.month))}</span>
+        <strong class="${cashBreakdown.variation >= 0 ? 'positive' : 'warning'}">${dashboardSignedMoney(cashBreakdown.variation)}</strong>
+        <small>${cashBreakdown.variation >= 0 ? 'Seu caixa aumentou neste mês.' : 'Seu caixa diminuiu, mas isso não significa saldo negativo.'}</small>
+      </div>
+    </section>
+
+    <section class="quick-finance-grid">
+      <article class="quick-finance-card"><span class="quick-icon">🛒</span><div><small>Consumo do mês</small><strong>${dashboardMoney(consumption)}</strong><span>${dashboardMoney(pendingCard)} pendentes no cartão</span></div></article>
+      <article class="quick-finance-card"><span class="quick-icon">📈</span><div><small>Investimentos</small><strong>${dashboardMoney(investments)}</strong><span>${pluggyInvestments.length} ativos importados</span></div></article>
+      <article class="quick-finance-card"><span class="quick-icon">◎</span><div><small>Patrimônio líquido</small><strong>${dashboardMoney(netWorth)}</strong><span>Contas + investimentos − cartões</span></div></article>
+      <article class="quick-finance-card"><span class="quick-icon">💳</span><div><small>Cartões em aberto</small><strong>${dashboardMoney(cardDebt)}</strong><span>Pagamento não vira novo consumo</span></div></article>
+    </section>
+
+    <section class="grid two dashboard-v18-grid" style="margin-top:18px">
+      <article class="card spending-card">
+        <div class="card-header"><div><h2 class="card-title">Gastos por categoria</h2><p class="card-note">Compras pendentes do cartão já entram no consumo.</p></div><button class="button small" data-page="reports">Ver relatório</button></div>
+        <div class="spending-overview">
+          ${dashboardCategoryDonut(categories, consumption)}
+          <div class="category-summary-list">${categoryRows || empty('Ainda não há gastos neste mês.')}</div>
+        </div>
+      </article>
+
+      <article class="card budget-v18-card">
+        <div class="card-header"><div><h2 class="card-title">Planejamento do mês</h2><p class="card-note">Acompanhe seus limites por categoria.</p></div><button class="button small" data-page="planning">Gerenciar</button></div>
+        ${budgets.length ? `<div class="stack">${budgets.map(renderBudgetProgress).join('')}</div>` : empty('Crie limites para acompanhar seus gastos.')}
+        ${budgetAlerts().length ? `<div class="budget-alert-summary"><span>⚠</span><div><strong>${budgetAlerts().length} categoria${budgetAlerts().length === 1 ? '' : 's'} em atenção</strong><small>Revise os limites antes do fim do mês.</small></div></div>` : ''}
+      </article>
+    </section>
+
+    <section class="card dashboard-cards-section" style="margin-top:18px">
+      <div class="card-header"><div><h2 class="card-title">Meus cartões</h2><p class="card-note">Fatura atual, limite disponível e vencimento em uma única visão.</p></div><button class="button small" data-page="patrimony">Ver todos</button></div>
+      ${dashboardCardsPreview()}
+    </section>
+
+    <section class="grid two dashboard-v18-grid" style="margin-top:18px">
+      <article class="card recent-v18-card">
+        <div class="card-header"><div><h2 class="card-title">Últimas movimentações</h2><p class="card-note">Conta, cartão e transferências organizados por categoria.</p></div><button class="button small" data-page="transactions">Ver todas</button></div>
+        ${recent.length ? recent.map(renderTransactionRow).join('') : empty('Nenhuma movimentação neste mês.')}
+      </article>
+      <article class="card attention-v18-card">
+        <div class="card-header"><div><h2 class="card-title">Atenção</h2><p class="card-note">Pendências e limites do mês</p></div></div>
+        <div class="stack">
+          <button class="attention-tile" data-action="show-pending-transactions"><span class="attention-icon">!</span><div><strong>Transações pendentes</strong><small>${pendingRows.length} registros aguardando confirmação</small></div><b>${dashboardMoney(pending)}</b></button>
+          ${budgetAlerts().slice(0, 3).map(alert => `<div class="attention-tile"><span class="attention-icon budget">◎</span><div><strong>${esc(alert.title)}</strong><small>${esc(alert.message)}</small></div><b>${alert.percent.toFixed(0)}%</b></div>`).join('') || '<div class="attention-ok"><span>✓</span><div><strong>Tudo sob controle</strong><small>Nenhum orçamento próximo do limite.</small></div></div>'}
+        </div>
+      </article>
+    </section>`;
+
+  return pageShell(content, `<button class="button primary desktop-add-transaction" data-action="add-transaction"><span class="desktop-label">Nova movimentação</span><span>＋</span></button>`);
+}
+
+function renderTransactions() {
+  const search = ui.transactionSearch.trim().toLowerCase();
+  const rows = allTransactions()
+    .filter(tx => {
+      const viewDate = tx.type === 'card' ? consumptionDate(tx) : transactionViewDate(tx);
+      return isInMonth(viewDate);
+    })
+    .filter(tx => ui.transactionType === 'all' || tx.type === ui.transactionType)
+    .filter(tx => ui.transactionStatus === 'all' || tx.status === ui.transactionStatus)
+    .filter(tx => !search || [tx.description, localizedCategory(tx.category), tx.subcategory, tx.member, ...(tx.tags || [])].join(' ').toLowerCase().includes(search))
+    .sort((a, b) => {
+      const ad = a.type === 'card' ? consumptionDate(a) : transactionViewDate(a);
+      const bd = b.type === 'card' ? consumptionDate(b) : transactionViewDate(b);
+      return (bd || '').localeCompare(ad || '');
+    });
+
+  const groups = new Map();
+  rows.forEach(tx => {
+    const date = tx.type === 'card' ? consumptionDate(tx) : transactionViewDate(tx);
+    const key = dateKey(date) || 'sem-data';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(tx);
+  });
+
+  const groupedHtml = [...groups.entries()].map(([date, group]) => {
+    const dayLabel = date === 'sem-data' ? 'Sem data' : (() => {
+      const d = parseDate(date);
+      const today = isoDate();
+      const yesterday = shiftDateDays(today, -1);
+      if (date === today) return 'Hoje';
+      if (date === yesterday) return 'Ontem';
+      return new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: 'short' }).format(d);
+    })();
+    const net = group.reduce((sum, tx) => sum + (tx.type === 'income' ? num(tx.amount) : tx.type === 'transfer' ? 0 : -num(tx.amount)), 0);
+    return `<section class="transaction-day-group">
+      <div class="transaction-day-header"><strong>${esc(dayLabel)}</strong><span>${net === 0 ? '' : `${net > 0 ? '+' : '−'}${money.format(Math.abs(net))}`}</span></div>
+      ${group.map(tx => renderTransactionRow(tx, true)).join('')}
+    </section>`;
+  }).join('');
+
+  const content = `
+    <article class="card transactions-card v18-transactions-card">
+      <div class="transaction-page-summary">
+        <div><small>${esc(formatMonthShort(ui.month))}</small><strong>${rows.length} movimentações</strong></div>
+        <button class="button primary transaction-new-mobile" data-action="add-transaction">＋ Nova</button>
+      </div>
+      <div class="toolbar transaction-toolbar v18-toolbar">
+        <input class="input search" id="transaction-search" placeholder="Buscar movimentação" value="${esc(ui.transactionSearch)}">
+        <select class="select filter-select" id="transaction-type-filter">
+          ${selectOptions([['all','Todos os tipos'],['income','Entradas'],['expense','Gastos em conta'],['card','Compras no cartão'],['card_payment','Faturas liquidadas'],['transfer','Transferências']], ui.transactionType)}
+        </select>
+        <select class="select filter-select" id="transaction-status-filter">
+          ${selectOptions([['all','Todas'],['confirmed','Confirmadas'],['pending','Pendentes'],['ignored','Ignoradas']], ui.transactionStatus)}
+        </select>
+      </div>
+      <div>${groupedHtml || empty('Nenhuma movimentação encontrada com estes filtros.')}</div>
+    </article>`;
+
+  return pageShell(content, `<button class="button primary desktop-add-transaction" data-action="add-transaction">＋ <span class="desktop-label">Nova</span></button>`);
+}
+
+function bottomNav() {
+  return `<nav class="bottom-nav v18-bottom-nav" aria-label="Navegação principal">
+    <button class="${ui.page === 'dashboard' ? 'active' : ''}" data-page="dashboard"><span class="nav-icon">⌂</span><span>Início</span></button>
+    <button class="${ui.page === 'transactions' ? 'active' : ''}" data-page="transactions"><span class="nav-icon">⇄</span><span>Transações</span></button>
+    <button class="bottom-add-button" data-action="add-transaction" aria-label="Nova movimentação"><span>＋</span></button>
+    <button class="${ui.page === 'planning' ? 'active' : ''}" data-page="planning"><span class="nav-icon">◎</span><span>Planejar</span></button>
+    <button class="${['patrimony','reports','settings'].includes(ui.page) ? 'active' : ''}" data-action="more-menu"><span class="nav-icon">•••</span><span>Mais</span></button>
+  </nav>`;
+}
+
+function openMoreMenu() {
+  const body = `<div class="more-menu-grid">
+    <button data-action="more-page" data-target-page="patrimony"><span>▣</span><div><strong>Contas e cartões</strong><small>Saldos, faturas e investimentos</small></div></button>
+    <button data-action="more-page" data-target-page="reports"><span>▥</span><div><strong>Relatórios</strong><small>Análises por período e categoria</small></div></button>
+    <button data-action="more-page" data-target-page="settings"><span>⚙</span><div><strong>Configurações</strong><small>Conta, sincronização e preferências</small></div></button>
+  </div>`;
+  openInfoModal('Mais opções', body);
+}
+
+function openDashboardCategoryDetails(category) {
+  const rows = monthConsumptionTransactions(ui.month)
+    .filter(tx => localizedCategory(tx.category) === category)
+    .sort((a, b) => (consumptionDate(b) || '').localeCompare(consumptionDate(a) || ''));
+  const total = rows.reduce((sum, tx) => sum + num(tx.amount), 0);
+  const body = `<div class="cash-detail-summary"><span>${rows.length} movimentações em ${esc(formatMonthShort(ui.month))}</span><strong>${money.format(total)}</strong></div>
+    <div class="category-detail-list">${rows.length ? rows.map(tx => renderTransactionRow(tx)).join('') : empty('Nenhuma movimentação encontrada.')}</div>`;
+  openInfoModal(category, body);
+}
+
+
 // Ações de drill-down adicionadas na v1.7.0.
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-action]');
@@ -3006,6 +3337,10 @@ document.addEventListener('click', event => {
 
   if (action === 'report-category-details') {
     openReportCategoryDetails(button.dataset.category || 'Sem categoria');
+  }
+
+  if (action === 'dashboard-category-details') {
+    openDashboardCategoryDetails(button.dataset.category || 'Sem categoria');
   }
 });
 
