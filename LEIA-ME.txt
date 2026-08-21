@@ -1,4 +1,4 @@
-MEU FINANCEIRO v2.1.0 — INTELIGÊNCIA, CONFIABILIDADE E PATRIMÔNIO 360°
+MEU FINANCEIRO v2.1.1 — INTELIGÊNCIA, CONFIABILIDADE E PATRIMÔNIO 360°
 
 OBJETIVO DESTA VERSÃO
 A v2.1.0 evolui o Meu Financeiro de painel de controle para uma central de acompanhamento financeiro. Ela preserva integralmente as regras de caixa, consumo, cartões, planejamento e Open Finance já validadas e acrescenta inteligência explicável sem alterar movimentações automaticamente.
@@ -110,3 +110,12 @@ config.js e os ícones continuam compatíveis e estão incluídos no pacote comp
 CACHE / PWA
 O cache foi atualizado para meu-financeiro-v2.1.0.
 Depois do commit, feche e abra novamente o PWA no iPhone caso a atualização não apareça imediatamente.
+
+
+AJUSTE v2.1.1 — NAVEGAÇÃO, ALERTAS E ATUALIZAÇÃO UNIFICADA
+- Corrigida a abertura de Contas e cartões pelo menu Mais no iPhone.
+- Alertas de gastos fora do padrão agora abrem um detalhamento com movimentação, categoria, data, origem, valor, mediana recente e multiplicador do desvio.
+- Alertas de Open Finance desatualizado também podem abrir detalhes da instituição.
+- Todos os comandos de sincronização/atualização passam a executar um único fluxo: sincronização do estado com o Supabase + atualização/importação do Open Finance.
+- O mesmo comportamento vale para o ícone do topo, Configurações, Contas e cartões e Saúde do Open Finance.
+- Quando o MeuPluggy bloquear atualização direta, o fluxo unificado abre a orientação para atualização manual, preservando o comportamento seguro existente.

@@ -1207,3 +1207,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .v21-patrimony-strip > button { grid-column:auto; }
   .v21-allocation-bars > div { grid-template-columns:72px minmax(60px,1fr) 44px; }
 }
+
+/* ===== Ajustes v2.1.1 — alertas detalhados e atualização unificada ===== */
+.v211-unusual-detail > div small { display:block; margin-top:3px; line-height:1.35; white-space:normal; }
+@media (max-width:760px) {
+  .v211-unusual-detail { align-items:start; }
+  .v211-unusual-detail > strong { justify-self:end; }
+}

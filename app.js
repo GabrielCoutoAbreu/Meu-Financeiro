@@ -2,7 +2,7 @@
 
 const LEGACY_STORAGE_KEY = 'meu-financeiro-data-v1';
 const APP_VERSION = 7;
-const RELEASE_VERSION = '2.1.0';
+const RELEASE_VERSION = '2.1.1';
 const REMOTE_TABLE = 'user_app_state';
 const PLUGGY_ITEMS_TABLE = 'pluggy_items';
 const PLUGGY_ACCOUNTS_TABLE = 'pluggy_accounts';
@@ -888,7 +888,7 @@ function pageShell(content, extraAction = '') {
     <main class="main">
       <header class="topbar">
         <div><h1 class="page-title">${title}</h1><p class="page-subtitle">${subtitle}</p></div>
-        <div class="top-actions">${monthControl}${extraAction}<button class="icon-button" data-action="sync-now" data-sync-indicator aria-label="Sincronizar">${syncStatusInfo().icon}</button><button class="icon-button" data-page="settings" aria-label="Configurações">⚙</button></div>
+        <div class="top-actions">${monthControl}${extraAction}<button class="icon-button" data-action="sync-now" data-sync-indicator aria-label="Atualizar todos os dados">${syncStatusInfo().icon}</button><button class="icon-button" data-page="settings" aria-label="Configurações">⚙</button></div>
       </header>
       ${installHelp()}
       ${content}
@@ -1168,7 +1168,7 @@ function renderPatrimony() {
 
   const content = `
     <section class="card open-finance-card">
-      <div class="card-header open-finance-header"><div><div class="open-finance-kicker">OPEN FINANCE · PLUGGY</div><h2 class="card-title">Bancos conectados</h2><p class="card-note">O botão de atualização verifica primeiro se a instituição permite nova coleta e só depois importa os dados para o aplicativo.</p></div><div class="open-finance-actions"><button class="button" data-action="refresh-open-finance">↻ Atualizar bancos</button><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button></div></div>
+      <div class="card-header open-finance-header"><div><div class="open-finance-kicker">OPEN FINANCE · PLUGGY</div><h2 class="card-title">Bancos conectados</h2><p class="card-note">Atualizar dados sincroniza a nuvem e, em seguida, verifica uma nova coleta Open Finance antes de importar contas, cartões, transações e investimentos.</p></div><div class="open-finance-actions"><button class="button" data-action="refresh-open-finance">↻ Atualizar dados</button><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button></div></div>
       ${renderPluggyConnections()}
       ${financeSummary}
     </section>
@@ -1311,7 +1311,7 @@ function renderSettings() {
         <div class="list-row"><div><div class="row-title">Armazenamento</div><div class="row-subtitle">Nuvem central com cópia local para uso offline.</div></div><span class="chip confirmed">Supabase</span></div>
       </div>
       ${conflictActions}
-      <div class="toolbar settings-actions" style="margin-top:14px"><button class="button primary" data-action="sync-now">Sincronizar agora</button><button class="button" data-action="force-pull">Recarregar da nuvem</button><button class="button" data-action="logout">Sair deste dispositivo</button></div>
+      <div class="toolbar settings-actions" style="margin-top:14px"><button class="button primary" data-action="sync-now">Atualizar tudo</button><button class="button" data-action="force-pull">Recarregar da nuvem</button><button class="button" data-action="logout">Sair deste dispositivo</button></div>
     </article>
 
     <article class="card" style="margin-top:16px">
@@ -1374,8 +1374,15 @@ function finishToast(node, message, tone = 'success', duration = 2600) {
   return node;
 }
 
+let unifiedSyncRunning = false;
+
 async function manualSync() {
-  const toast = showToast('Sincronizando com a nuvem…', { tone: 'info', duration: 0 });
+  if (unifiedSyncRunning) {
+    showToast('A atualização já está em andamento.', { tone: 'info', duration: 2200 });
+    return;
+  }
+
+  const toast = showToast('Atualizando seus dados…', { tone: 'info', duration: 0 });
 
   if (!navigator.onLine) {
     syncMeta.status = 'offline';
@@ -1387,22 +1394,48 @@ async function manualSync() {
     return;
   }
 
+  unifiedSyncRunning = true;
   try {
+    updateToastText(toast, 'Sincronizando preferências e dados locais com a nuvem…', 'info');
     if (syncMeta.pending) await pushStateToCloud();
-    else await pullStateFromCloud({ force: true });
+    else await pullStateFromCloud({ force: true, quiet: true });
 
-    if (syncMeta.status === 'synced') {
-      finishToast(toast, syncMeta.message || 'Sincronização concluída.', 'success');
-    } else if (syncMeta.status === 'conflict') {
-      finishToast(toast, 'Conflito detectado. Abra Configurações para escolher a versão.', 'warning', 3800);
-    } else if (syncMeta.status === 'offline') {
-      finishToast(toast, 'Sem internet — sincronização pendente.', 'warning');
+    const cloudConflict = syncMeta.status === 'conflict';
+    const cloudError = !['synced', 'conflict'].includes(syncMeta.status);
+
+    updateToastText(toast, 'Atualizando bancos, cartões, transações e investimentos…', 'info');
+    const openFinanceResult = await refreshOpenFinance({ quiet: true });
+
+    if (ui.page === 'intelligence' || ui.page === 'patrimony') render();
+
+    if (openFinanceResult?.requiresMeuPluggy) {
+      finishToast(toast, cloudConflict
+        ? 'Open Finance verificado. Há também um conflito de sincronização na nuvem.'
+        : 'Nuvem sincronizada. Para uma nova coleta bancária, atualize no MeuPluggy.', 'warning', 5200);
+      openMeuPluggyRefreshDialog(openFinanceResult.refreshData || {});
+      return;
+    }
+
+    if (!openFinanceResult?.success) {
+      finishToast(toast, cloudConflict
+        ? 'Há um conflito na nuvem e o Open Finance não pôde ser atualizado.'
+        : 'A nuvem foi verificada, mas não foi possível atualizar o Open Finance.', 'error', 5200);
+      return;
+    }
+
+    if (cloudConflict) {
+      finishToast(toast, 'Open Finance atualizado. Existe um conflito na nuvem para revisar em Configurações.', 'warning', 5200);
+    } else if (cloudError) {
+      finishToast(toast, 'Open Finance atualizado, mas a sincronização da nuvem precisa de atenção.', 'warning', 5200);
     } else {
-      finishToast(toast, syncMeta.message || 'Não foi possível sincronizar agora.', 'error', 3800);
+      finishToast(toast, 'Tudo atualizado: nuvem, bancos, cartões, transações e investimentos.', 'success', 4200);
     }
   } catch (error) {
-    console.error('Falha na sincronização manual:', error);
-    finishToast(toast, 'Erro ao sincronizar. Tente novamente.', 'error', 3800);
+    console.error('Falha na atualização unificada:', error);
+    finishToast(toast, 'Erro ao atualizar os dados. Tente novamente.', 'error', 4200);
+  } finally {
+    unifiedSyncRunning = false;
+    updateSyncIndicator();
   }
 }
 
@@ -2129,7 +2162,7 @@ document.addEventListener('click', event => {
     return;
   }
   if (action === 'connect-bank') { connectBankWithPluggy(); return; }
-  if (action === 'refresh-open-finance') { refreshOpenFinance(); return; }
+  if (action === 'refresh-open-finance') { manualSync(); return; }
   if (action === 'open-meupluggy-refresh') {
     try { localStorage.setItem(OPEN_FINANCE_RETURN_KEY, new Date().toISOString()); } catch {}
     closeModal();
@@ -3924,7 +3957,7 @@ function pageShell(content, extraAction = '') {
   const reviewCount = pluggyTransactions.length ? reviewCandidates().length : 0;
   return `
     <aside class="sidebar"><div class="brand"><div class="brand-mark">R$</div><div><div class="brand-title">${esc(state.preferences.name || 'Meu Financeiro')}</div><div class="brand-subtitle">Controle pessoal</div></div></div><nav class="nav">${NAV_ITEMS.map(([page, icon, label]) => `<button class="nav-button ${ui.page === page ? 'active' : ''}" data-page="${page}"><span class="nav-icon">${icon}</span>${label}</button>`).join('')}<button class="nav-button review-nav-button" data-action="open-review-center"><span class="nav-icon">✓</span>Revisar${reviewCount ? `<span class="nav-badge">${reviewCount > 99 ? '99+' : reviewCount}</span>` : ''}</button></nav><div class="sidebar-footer"><strong>☁ Sincronização segura.</strong><br>${esc(authSession?.user?.email || '')}</div></aside>
-    <main class="main"><header class="topbar"><div><h1 class="page-title">${title}</h1><p class="page-subtitle">${subtitle}</p></div><div class="top-actions">${monthControl}${extraAction}<button class="icon-button" data-action="sync-now" data-sync-indicator aria-label="Sincronizar">${syncStatusInfo().icon}</button><button class="icon-button" data-page="settings" aria-label="Configurações">⚙</button></div></header>${installHelp()}${content}</main>${bottomNav()}`;
+    <main class="main"><header class="topbar"><div><h1 class="page-title">${title}</h1><p class="page-subtitle">${subtitle}</p></div><div class="top-actions">${monthControl}${extraAction}<button class="icon-button" data-action="sync-now" data-sync-indicator aria-label="Atualizar todos os dados">${syncStatusInfo().icon}</button><button class="icon-button" data-page="settings" aria-label="Configurações">⚙</button></div></header>${installHelp()}${content}</main>${bottomNav()}`;
 }
 
 function openMoreMenu() {
@@ -4236,7 +4269,7 @@ function renderPatrimony() {
       ? `<div class="open-finance-summary"><span><strong>${pluggyAccounts.filter(a => String(a.type).toUpperCase() === 'BANK').length}</strong> contas</span><span><strong>${importedCards.length}</strong> cartões</span><span><strong>${pluggyInvestments.length}</strong> investimentos · ${money.format(totalInvestmentBalance())}</span><span><strong>${pluggyTransactions.length}</strong> movimentações armazenadas</span></div>`
       : '';
 
-  const content = `<section class="card open-finance-card"><div class="card-header open-finance-header"><div><div class="open-finance-kicker">OPEN FINANCE · PLUGGY</div><h2 class="card-title">Bancos conectados</h2><p class="card-note">Atualize as instituições e acompanhe a posição financeira importada.</p></div><div class="open-finance-actions"><button class="button" data-action="refresh-open-finance">↻ Atualizar bancos</button><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button></div></div>${renderPluggyConnections()}${financeSummary}</section>
+  const content = `<section class="card open-finance-card"><div class="card-header open-finance-header"><div><div class="open-finance-kicker">OPEN FINANCE · PLUGGY</div><h2 class="card-title">Bancos conectados</h2><p class="card-note">Um único comando sincroniza a nuvem e atualiza bancos, cartões, transações e investimentos.</p></div><div class="open-finance-actions"><button class="button" data-action="refresh-open-finance">↻ Atualizar dados</button><button class="button primary" data-action="connect-bank">🏦 Conectar banco</button></div></div>${renderPluggyConnections()}${financeSummary}</section>
     <section class="v2-patrimony-highlight" style="margin-top:26px"><div class="card-header"><div><h2 class="card-title">Central de cartões</h2><p class="card-note">Faturas, compras por mês, limite e parcelas futuras.</p></div></div><div class="grid three">${importedCardHtml || manualCardHtml ? importedCardHtml + manualCardHtml : empty('Nenhum cartão disponível.')}</div></section>
     <section style="margin-top:26px"><div class="card-header"><div><h2 class="card-title">Contas Open Finance</h2><p class="card-note">Saldos atuais informados pelas instituições conectadas.</p></div></div><div class="grid three">${openBankCards || empty(pluggyDataLoading ? 'Carregando contas…' : 'Nenhuma conta bancária importada.')}</div></section>
     <section style="margin-top:26px"><div class="card-header investment-section-header"><div><h2 class="card-title">Investimentos Open Finance</h2><p class="card-note">Posição atual dos ativos informada pelas instituições conectadas.</p></div>${pluggyInvestments.length ? `<div class="investment-summary"><span>Patrimônio investido</span><strong>${money.format(totalInvestmentBalance())}</strong></div>` : ''}</div><div class="grid three">${openInvestmentCards || empty(pluggyDataLoading ? 'Carregando investimentos…' : 'Nenhum investimento importado.')}</div></section>
@@ -5154,11 +5187,45 @@ function v21SeverityChip(level) {
 
 function v21RenderAlerts(alerts = v21Alerts()) {
   if (!alerts.length) return `<div class="v21-empty-good"><span>✓</span><div><strong>Nenhum alerta prioritário</strong><p>Os critérios habilitados não encontraram pendências importantes agora.</p></div></div>`;
-  return `<div class="v21-alert-list">${alerts.map(alert => `<article class="v21-alert-row ${alert.severity}">
-    <span class="v21-alert-icon">${esc(alert.icon || '!')}</span>
-    <div class="v21-alert-main"><strong>${esc(alert.title)}</strong><small>${esc(alert.description)}</small></div>
-    <div class="v21-alert-actions">${alert.action === 'review' ? `<button class="button small" data-action="open-review-center">Revisar</button>` : alert.action ? `<button class="button small" data-page="${esc(alert.action)}">Abrir</button>` : ''}<button class="icon-button v21-dismiss" data-action="v21-dismiss-alert" data-alert-id="${esc(alert.id)}" aria-label="Dispensar alerta">×</button></div>
-  </article>`).join('')}</div>`;
+  return `<div class="v21-alert-list">${alerts.map(alert => {
+    let actionButton = '';
+    if (alert.action === 'review') {
+      actionButton = `<button class="button small" data-action="open-review-center">Revisar</button>`;
+    } else if (String(alert.id || '').startsWith('unusual-')) {
+      actionButton = `<button class="button small" data-action="v21-alert-details" data-alert-kind="unusual">Detalhes</button>`;
+    } else if (String(alert.id || '').startsWith('bank-stale-')) {
+      actionButton = `<button class="button small" data-action="v21-alert-details" data-alert-kind="bank" data-alert-id="${esc(alert.id)}">Detalhes</button>`;
+    } else if (alert.action) {
+      actionButton = `<button class="button small" data-page="${esc(alert.action)}">Abrir</button>`;
+    }
+    return `<article class="v21-alert-row ${alert.severity}">
+      <span class="v21-alert-icon">${esc(alert.icon || '!')}</span>
+      <div class="v21-alert-main"><strong>${esc(alert.title)}</strong><small>${esc(alert.description)}</small></div>
+      <div class="v21-alert-actions">${actionButton}<button class="icon-button v21-dismiss" data-action="v21-dismiss-alert" data-alert-id="${esc(alert.id)}" aria-label="Dispensar alerta">×</button></div>
+    </article>`;
+  }).join('')}</div>`;
+}
+
+function v21OpenAlertDetails(kind, alertId = '') {
+  if (kind === 'unusual') {
+    const unusual = v21UnusualConsumption(45);
+    const rows = unusual.map(item => {
+      const tx = item.tx;
+      const ratio = item.median > 0 ? num(tx.amount) / item.median : 0;
+      return `<div class="v21-detail-row v211-unusual-detail"><div><strong>${esc(tx.description || 'Movimentação')}</strong><small>${esc(item.category)} · ${formatDateBr(consumptionDate(tx))} · ${esc(tx.sourceLabel || (tx.origin === 'openfinance' ? 'Open Finance' : 'Manual'))}</small><small>Mediana recente ${money.format(item.median)} · este gasto foi ${ratio.toFixed(1).replace('.', ',')}× a mediana</small></div><span class="chip ignored">fora do padrão</span><strong>${money.format(tx.amount)}</strong></div>`;
+    }).join('');
+    const total = unusual.reduce((sum, item) => sum + num(item.tx.amount), 0);
+    const body = `<div class="cash-detail-summary"><span>${unusual.length} gasto${unusual.length === 1 ? '' : 's'} sinalizado${unusual.length === 1 ? '' : 's'} nos últimos 45 dias</span><strong>${money.format(total)}</strong></div><p class="card-note" style="margin:12px 0 16px">O alerta compara cada gasto com a mediana recente da mesma categoria. Ele é apenas um sinal de revisão e não altera nenhuma movimentação.</p><div class="v21-detail-section">${rows || empty('Nenhum gasto fora do padrão encontrado agora.')}</div>`;
+    openInfoModal('Gastos fora do padrão · detalhes', body);
+    return;
+  }
+
+  if (kind === 'bank') {
+    const health = v21OpenFinanceHealth();
+    const itemId = String(alertId || '').replace(/^bank-stale-\d{4}-\d{2}-\d{2}-/, '');
+    const rows = health.filter(item => !itemId || item.itemId === itemId).map(item => `<div class="v21-detail-row"><div><strong>${esc(item.institution)}</strong><small>${item.hours == null ? 'Sem horário confiável de atualização' : `Última referência ${v21FreshnessText(item.hours)}`}</small></div><span class="chip ${item.level === 'good' ? 'confirmed' : item.level === 'warning' ? 'pending' : 'ignored'}">${esc(item.label || item.level)}</span></div>`).join('');
+    openInfoModal('Saúde do Open Finance · detalhes', `<div class="v21-detail-section">${rows || empty('Nenhuma conexão correspondente encontrada.')}</div><div class="toolbar" style="margin-top:14px"><button class="button primary" data-action="refresh-open-finance">↻ Atualizar todos os dados</button></div>`);
+  }
 }
 
 function v21DashboardBanner() {
@@ -5251,7 +5318,7 @@ function renderIntelligence() {
 
     <section class="grid kpis v21-top-kpis" style="margin-top:16px"><article class="card"><div class="kpi-label">Patrimônio líquido</div><div class="kpi-value ${snapshot.netWorth >= 0 ? 'positive' : 'negative'}">${money.format(snapshot.netWorth)}</div><div class="kpi-meta">Contas + investimentos − cartões</div></article><article class="card"><div class="kpi-label">Saldo disponível</div><div class="kpi-value ${snapshot.bankCash >= 0 ? 'positive' : 'negative'}">${money.format(snapshot.bankCash)}</div><div class="kpi-meta">Somente recursos bancários</div></article><article class="card"><div class="kpi-label">Alertas ativos</div><div class="kpi-value ${alerts.some(item => item.severity === 'error') ? 'negative' : alerts.length ? 'warning' : 'positive'}">${alerts.length}</div><div class="kpi-meta">Critérios habilitados por você</div></article><article class="card"><div class="kpi-label">Dados categorizados</div><div class="kpi-value">${score.categoryQuality.percent.toFixed(0)}%</div><div class="kpi-meta">Últimos 60 dias · ${score.categoryQuality.total} registros</div></article></section>
 
-    <section class="grid two" style="margin-top:16px"><article class="card"><div class="card-header"><div><h2 class="card-title">Alertas inteligentes</h2><p class="card-note">Somente sinais financeiros acionáveis; você pode dispensar cada alerta.</p></div><button class="button small" data-action="v21-restore-alerts">Restaurar dispensados</button></div>${v21RenderAlerts(alerts)}<details class="v21-alert-settings"><summary>Configurar tipos de alerta</summary><div>${activePrefs}</div></details></article><article class="card"><div class="card-header"><div><h2 class="card-title">Saúde do Open Finance</h2><p class="card-note">Coleta bancária, importação e volume por instituição.</p></div><button class="button small primary" data-action="refresh-open-finance">↻ Atualizar</button></div>${v21RenderOpenFinanceHealth(anomalyBundle.health)}</article></section>
+    <section class="grid two" style="margin-top:16px"><article class="card"><div class="card-header"><div><h2 class="card-title">Alertas inteligentes</h2><p class="card-note">Somente sinais financeiros acionáveis; você pode dispensar cada alerta.</p></div><button class="button small" data-action="v21-restore-alerts">Restaurar dispensados</button></div>${v21RenderAlerts(alerts)}<details class="v21-alert-settings"><summary>Configurar tipos de alerta</summary><div>${activePrefs}</div></details></article><article class="card"><div class="card-header"><div><h2 class="card-title">Saúde do Open Finance</h2><p class="card-note">Coleta bancária, importação e volume por instituição. O botão usa a mesma atualização completa do restante do app.</p></div><button class="button small primary" data-action="refresh-open-finance">↻ Atualizar dados</button></div>${v21RenderOpenFinanceHealth(anomalyBundle.health)}</article></section>
 
     <section class="grid two" style="margin-top:16px"><article class="card"><div class="card-header"><div><h2 class="card-title">Evolução do patrimônio</h2><p class="card-note">Último snapshot real de cada mês, a partir da v2.1.</p></div><button class="button small" data-action="v21-record-snapshot">Registrar agora</button></div>${v21RenderPatrimonyEvolution()}</article><article class="card"><div class="card-header"><div><h2 class="card-title">Composição patrimonial</h2><p class="card-note">Ativos e dívida de cartões separados.</p></div></div>${v21RenderAllocation(snapshot)}</article></section>
 
@@ -5292,12 +5359,12 @@ openMoreMenu = function() {
   const alerts = v21Alerts().length;
   const reviewCount = reviewCandidates().length;
   const body = `<div class="more-menu-grid v19-more-menu">
-    <button data-action="more-page" data-target-page="intelligence"><span>✦</span><div><strong>Inteligência${alerts ? ` · ${alerts}` : ''}</strong><small>Alertas, Open Finance e patrimônio 360°</small></div></button>
+    <button data-action="v21-nav-page" data-target-page="intelligence"><span>✦</span><div><strong>Inteligência${alerts ? ` · ${alerts}` : ''}</strong><small>Alertas, Open Finance e patrimônio 360°</small></div></button>
     <button data-action="open-agenda"><span>📅</span><div><strong>Agenda financeira</strong><small>Contas, receitas e saldo projetado</small></div></button>
     <button data-action="open-review-center"><span>✓</span><div><strong>Revisar movimentações${reviewCount ? ` · ${reviewCount}` : ''}</strong><small>Categorias e regras automáticas</small></div></button>
-    <button data-action="more-page" data-target-page="patrimony"><span>▣</span><div><strong>Contas e cartões</strong><small>Saldos, faturas e investimentos</small></div></button>
-    <button data-action="more-page" data-target-page="reports"><span>▥</span><div><strong>Relatórios</strong><small>Análises por período e categoria</small></div></button>
-    <button data-action="more-page" data-target-page="settings"><span>⚙</span><div><strong>Configurações</strong><small>Conta, sincronização e preferências</small></div></button>
+    <button data-action="v21-nav-page" data-target-page="patrimony"><span>▣</span><div><strong>Contas e cartões</strong><small>Saldos, faturas e investimentos</small></div></button>
+    <button data-action="v21-nav-page" data-target-page="reports"><span>▥</span><div><strong>Relatórios</strong><small>Análises por período e categoria</small></div></button>
+    <button data-action="v21-nav-page" data-target-page="settings"><span>⚙</span><div><strong>Configurações</strong><small>Conta, sincronização e preferências</small></div></button>
   </div>`;
   openInfoModal('Mais opções', body);
 };
@@ -5332,6 +5399,22 @@ document.addEventListener('click', event => {
     const changed = v21RecordPatrimonySnapshot();
     if (changed) persist();
     render(); showToast(changed ? 'Snapshot patrimonial registrado.' : 'O snapshot de hoje já está atualizado.', { tone: 'success' }); return;
+  }
+  if (action === 'v21-nav-page') {
+    const targetPage = button.dataset.targetPage || 'dashboard';
+    closeModal();
+    ui.page = targetPage;
+    render();
+    if (targetPage === 'patrimony') {
+      Promise.all([loadPluggyItems({ quiet: true }), loadOpenFinanceData({ quiet: true })])
+        .then(() => loadPluggyRemoteStatus({ quiet: true }));
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+  if (action === 'v21-alert-details') {
+    v21OpenAlertDetails(button.dataset.alertKind || '', button.dataset.alertId || '');
+    return;
   }
   if (action === 'v21-integrity-details') { v21OpenIntegrityDetails(); return; }
 });
